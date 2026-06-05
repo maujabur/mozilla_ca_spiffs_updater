@@ -1,8 +1,7 @@
-#include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "ca_manager.h"
+#include "cJSON.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_event.h"
@@ -109,85 +108,33 @@ static void trim_text(char *text)
     text[strcspn(text, "\r\n\t ")] = '\0';
 }
 
-static const char *skip_json_ws(const char *cursor)
+static void log_active_bundle_state(const char *prefix)
 {
-    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') {
-        cursor++;
+    char active_version[CA_VERSION_BUFFER_SIZE];
+    esp_err_t err = ca_manager_get_active_version(active_version, sizeof(active_version));
+    if (err != ESP_OK) {
+        strlcpy(active_version, "(unknown)", sizeof(active_version));
     }
-    return cursor;
+
+    ESP_LOGI(TAG, "%s CA bundle version=%s size=%u",
+             prefix,
+             active_version,
+             (unsigned)ca_manager_get_active_bundle_size());
 }
 
-static const char *find_json_value(const char *json, const char *name)
+static esp_err_t copy_json_string(cJSON *root, const char *name, char *out, size_t out_size)
 {
-    char key[48];
-    int written = snprintf(key, sizeof(key), "\"%s\"", name);
-    if (written < 0 || (size_t)written >= sizeof(key)) {
-        return NULL;
-    }
-
-    const char *cursor = strstr(json, key);
-    if (cursor == NULL) {
-        return NULL;
-    }
-
-    cursor += strlen(key);
-    cursor = skip_json_ws(cursor);
-    if (*cursor != ':') {
-        return NULL;
-    }
-
-    return skip_json_ws(cursor + 1);
-}
-
-static esp_err_t copy_json_string(const char *json, const char *name, char *out, size_t out_size)
-{
-    const char *value = find_json_value(json, name);
-    if (value == NULL || *value != '"') {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+    if (!cJSON_IsString(item) || item->valuestring == NULL || item->valuestring[0] == '\0') {
         ESP_LOGE(TAG, "Manifest field is missing or invalid: %s", name);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    value++;
-    size_t len = 0;
-    while (value[len] != '\0' && value[len] != '"') {
-        if (value[len] == '\\') {
-            ESP_LOGE(TAG, "Escaped strings are not supported in manifest field: %s", name);
-            return ESP_ERR_INVALID_RESPONSE;
-        }
-        len++;
-    }
-
-    if (value[len] != '"') {
-        ESP_LOGE(TAG, "Unterminated manifest field: %s", name);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    if (len == 0 || len >= out_size) {
+    if (strlcpy(out, item->valuestring, out_size) >= out_size) {
         ESP_LOGE(TAG, "Manifest field is too long: %s", name);
         return ESP_ERR_INVALID_SIZE;
     }
 
-    memcpy(out, value, len);
-    out[len] = '\0';
-    return ESP_OK;
-}
-
-static esp_err_t read_json_int(const char *json, const char *name, int *out_value)
-{
-    const char *value = find_json_value(json, name);
-    if (value == NULL || *value < '0' || *value > '9') {
-        ESP_LOGE(TAG, "Manifest number is missing or invalid: %s", name);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    char *end = NULL;
-    long parsed = strtol(value, &end, 10);
-    if (end == value || parsed <= 0 || parsed > INT32_MAX) {
-        ESP_LOGE(TAG, "Manifest number is out of range: %s", name);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    *out_value = (int)parsed;
     return ESP_OK;
 }
 
@@ -199,41 +146,55 @@ static esp_err_t parse_manifest(const char *manifest_text, ca_bundle_manifest_t 
 
     memset(manifest, 0, sizeof(*manifest));
 
-    int schema = 0;
-    ESP_RETURN_ON_ERROR(read_json_int(manifest_text, "schema", &schema),
-                        TAG, "Invalid manifest schema");
-    if (schema != 1) {
-        ESP_LOGE(TAG, "Unsupported manifest schema: %d", schema);
+    cJSON *root = cJSON_Parse(manifest_text);
+    if (root == NULL) {
+        ESP_LOGE(TAG, "Manifest JSON parse failed");
         return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    esp_err_t ret = ESP_OK;
+    cJSON *schema = cJSON_GetObjectItemCaseSensitive(root, "schema");
+    if (!cJSON_IsNumber(schema) || schema->valueint != 1) {
+        ESP_LOGE(TAG, "Unsupported manifest schema");
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto cleanup;
     }
 
     char artifact_type[24];
-    esp_err_t err = copy_json_string(manifest_text, "artifact_type", artifact_type, sizeof(artifact_type));
-    if (err != ESP_OK) {
-        return err;
+    ret = copy_json_string(root, "artifact_type", artifact_type, sizeof(artifact_type));
+    if (ret != ESP_OK) {
+        goto cleanup;
     }
     if (strcmp(artifact_type, "ca_bundle") != 0) {
         ESP_LOGE(TAG, "Unexpected manifest artifact_type: %s", artifact_type);
-        return ESP_ERR_INVALID_RESPONSE;
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto cleanup;
     }
 
-    ESP_RETURN_ON_ERROR(copy_json_string(manifest_text, "version", manifest->version, sizeof(manifest->version)),
-                        TAG, "Invalid manifest version");
-    ESP_RETURN_ON_ERROR(copy_json_string(manifest_text, "url", manifest->url, sizeof(manifest->url)),
-                        TAG, "Invalid manifest URL");
-    ESP_RETURN_ON_ERROR(copy_json_string(manifest_text, "sha256", manifest->sha256, sizeof(manifest->sha256)),
-                        TAG, "Invalid manifest SHA-256");
+    ESP_GOTO_ON_ERROR(copy_json_string(root, "version", manifest->version, sizeof(manifest->version)),
+                      cleanup, TAG, "Invalid manifest version");
+    ESP_GOTO_ON_ERROR(copy_json_string(root, "url", manifest->url, sizeof(manifest->url)),
+                      cleanup, TAG, "Invalid manifest URL");
+    ESP_GOTO_ON_ERROR(copy_json_string(root, "sha256", manifest->sha256, sizeof(manifest->sha256)),
+                      cleanup, TAG, "Invalid manifest SHA-256");
 
     if (strlen(manifest->sha256) != CA_SHA256_HEX_SIZE) {
         ESP_LOGE(TAG, "Manifest SHA-256 is invalid: %s", manifest->sha256);
-        return ESP_ERR_INVALID_RESPONSE;
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto cleanup;
     }
 
-    int size = 0;
-    ESP_RETURN_ON_ERROR(read_json_int(manifest_text, "size", &size),
-                        TAG, "Invalid manifest size");
-    manifest->size = (size_t)size;
-    return ESP_OK;
+    cJSON *size = cJSON_GetObjectItemCaseSensitive(root, "size");
+    if (!cJSON_IsNumber(size) || size->valuedouble <= 0) {
+        ESP_LOGE(TAG, "Manifest size is missing or invalid");
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto cleanup;
+    }
+    manifest->size = (size_t)size->valuedouble;
+
+cleanup:
+    cJSON_Delete(root);
+    return ret;
 }
 
 static esp_err_t load_manifest(ca_bundle_manifest_t *manifest)
@@ -362,11 +323,7 @@ void app_main(void)
     ESP_ERROR_CHECK(err);
 
     ESP_ERROR_CHECK(ca_manager_init());
-    char active_version[CA_VERSION_BUFFER_SIZE];
-    esp_err_t version_err = ca_manager_get_active_version(active_version, sizeof(active_version));
-    if (version_err != ESP_OK) {
-        strlcpy(active_version, "(unknown)", sizeof(active_version));
-    }
+    log_active_bundle_state("Boot");
 
     if (connect_wifi() == ESP_OK) {
         err = update_bundle_if_needed();
@@ -375,12 +332,5 @@ void app_main(void)
         }
     }
 
-    version_err = ca_manager_get_active_version(active_version, sizeof(active_version));
-    if (version_err != ESP_OK) {
-        strlcpy(active_version, "(unknown)", sizeof(active_version));
-    }
-
-    ESP_LOGI(TAG, "Ready. Active CA bundle version=%s size=%u",
-             active_version,
-             (unsigned)ca_manager_get_active_bundle_size());
+    log_active_bundle_state("Ready.");
 }

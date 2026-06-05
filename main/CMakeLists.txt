@@ -4,6 +4,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         ca_manager
+        cjson
         esp_event
         esp_netif
         esp_wifi

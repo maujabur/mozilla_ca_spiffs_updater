@@ -31,6 +31,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ccache/
+.component_cache/
 .coverage
 htmlcov/
 .venv/
