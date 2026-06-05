@@ -16,6 +16,8 @@
 #define WIFI_FAIL_BIT BIT1
 #define MAX_WIFI_RETRY 8
 #define CA_VERSION_BUFFER_SIZE 32
+#define CA_SHA256_HEX_SIZE 64
+#define CA_SHA256_BUFFER_SIZE 80
 
 static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
@@ -87,13 +89,13 @@ static esp_err_t connect_wifi(void)
     return ESP_FAIL;
 }
 
-static void trim_version(char *version)
+static void trim_text(char *text)
 {
-    if (version == NULL) {
+    if (text == NULL) {
         return;
     }
 
-    version[strcspn(version, "\r\n\t ")] = '\0';
+    text[strcspn(text, "\r\n\t ")] = '\0';
 }
 
 static esp_err_t update_bundle_if_needed(void)
@@ -108,9 +110,25 @@ static esp_err_t update_bundle_if_needed(void)
                                                  remote_version,
                                                  sizeof(remote_version)),
                         TAG, "Failed to download CA bundle version");
-    trim_version(remote_version);
+    trim_text(remote_version);
     if (remote_version[0] == '\0') {
         ESP_LOGE(TAG, "Downloaded CA bundle version is empty");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (strlen(CONFIG_CA_UPDATER_SHA256_URL) == 0) {
+        ESP_LOGE(TAG, "SHA-256 URL is empty");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char remote_sha256[CA_SHA256_BUFFER_SIZE];
+    ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_SHA256_URL,
+                                                 remote_sha256,
+                                                 sizeof(remote_sha256)),
+                        TAG, "Failed to download CA bundle SHA-256");
+    trim_text(remote_sha256);
+    if (strlen(remote_sha256) != CA_SHA256_HEX_SIZE) {
+        ESP_LOGE(TAG, "Downloaded CA bundle SHA-256 is invalid: %s", remote_sha256);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
@@ -128,10 +146,19 @@ static esp_err_t update_bundle_if_needed(void)
              active_version[0] != '\0' ? active_version : "(none)",
              remote_version);
 
-    ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, false),
+    bool promoted = false;
+    ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client_verified(CONFIG_CA_UPDATER_BUNDLE_URL,
+                                                                    remote_sha256,
+                                                                    false,
+                                                                    &promoted),
                         TAG, "Bundle download/apply failed");
     ESP_RETURN_ON_ERROR(ca_manager_set_active_version(remote_version),
                         TAG, "Failed to store CA bundle version");
+
+    if (!promoted) {
+        ESP_LOGI(TAG, "CA bundle version corrected to %s; restart not needed", remote_version);
+        return ESP_OK;
+    }
 
     ESP_LOGI(TAG, "CA bundle updated to version %s; restarting", remote_version);
     fflush(stdout);
@@ -149,6 +176,11 @@ void app_main(void)
     ESP_ERROR_CHECK(err);
 
     ESP_ERROR_CHECK(ca_manager_init());
+    char active_version[CA_VERSION_BUFFER_SIZE];
+    esp_err_t version_err = ca_manager_get_active_version(active_version, sizeof(active_version));
+    if (version_err != ESP_OK) {
+        strlcpy(active_version, "(unknown)", sizeof(active_version));
+    }
 
     if (connect_wifi() == ESP_OK) {
         err = update_bundle_if_needed();
@@ -157,6 +189,12 @@ void app_main(void)
         }
     }
 
-    ESP_LOGI(TAG, "Ready. Active dynamic bundle size=%u",
+    version_err = ca_manager_get_active_version(active_version, sizeof(active_version));
+    if (version_err != ESP_OK) {
+        strlcpy(active_version, "(unknown)", sizeof(active_version));
+    }
+
+    ESP_LOGI(TAG, "Ready. Active CA bundle version=%s size=%u",
+             active_version,
              (unsigned)ca_manager_get_active_bundle_size());
 }

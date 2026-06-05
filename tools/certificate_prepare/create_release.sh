@@ -19,6 +19,7 @@ fi
 TAG="v${VERSION}"
 BIN_FILE="${SCRIPT_DIR}/bundle_ca.bin"
 VERSION_FILE="${SCRIPT_DIR}/bundle_ca.version"
+SHA256_FILE="${SCRIPT_DIR}/bundle_ca.sha256"
 TITLE="Mozilla CA bundle ${TAG}"
 NOTES="Release ${TAG}"
 
@@ -39,12 +40,23 @@ if [[ ! -f "${BIN_FILE}" ]]; then
   exit 1
 fi
 
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256="$(sha256sum "${BIN_FILE}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256="$(shasum -a 256 "${BIN_FILE}" | awk '{print $1}')"
+else
+  echo "Erro: sha256sum ou shasum nao encontrado."
+  exit 1
+fi
+
 printf "%s\n" "${VERSION}" > "${VERSION_FILE}"
+printf "%s\n" "${SHA256}" > "${SHA256_FILE}"
 
 echo "Criando release ${TAG}"
 echo "Arquivo: ${BIN_FILE}"
 echo "Versao: ${VERSION_FILE}"
+echo "SHA-256: ${SHA256_FILE}"
 echo "Titulo: ${TITLE}"
 echo "Notas: ${NOTES}"
 
-gh release create "${TAG}" "${BIN_FILE}" "${VERSION_FILE}" --title "${TITLE}" --notes "${NOTES}"
+gh release create "${TAG}" "${BIN_FILE}" "${VERSION_FILE}" "${SHA256_FILE}" --title "${TITLE}" --notes "${NOTES}"

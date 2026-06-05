@@ -15,10 +15,13 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "mbedtls/private/sha256.h"
 
 #define CA_MANAGER_DOWNLOAD_BUFFER_SIZE 4096
 #define CA_MANAGER_HTTP_TX_BUFFER_SIZE 4096
 #define CA_MANAGER_MAX_HTTP_REDIRECTS 5
+#define CA_MANAGER_SHA256_SIZE 32
+#define CA_MANAGER_SHA256_HEX_SIZE 65
 
 struct ca_manager_update_ctx {
     FILE *file;
@@ -26,6 +29,7 @@ struct ca_manager_update_ctx {
     char temp_path[128];
     size_t expected_size;
     size_t written_size;
+    bool promoted;
     bool active;
 };
 
@@ -37,6 +41,49 @@ static bool s_spiffs_mounted;
 static bool is_http_redirect_status(int status)
 {
     return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+static int hex_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static esp_err_t sha256_hex_to_bytes(const char *hex, uint8_t out[CA_MANAGER_SHA256_SIZE])
+{
+    if (hex == NULL || strlen(hex) != CA_MANAGER_SHA256_HEX_SIZE - 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    for (size_t i = 0; i < CA_MANAGER_SHA256_SIZE; i++) {
+        int high = hex_value(hex[i * 2]);
+        int low = hex_value(hex[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        out[i] = (uint8_t)((high << 4) | low);
+    }
+
+    return ESP_OK;
+}
+
+static void sha256_bytes_to_hex(const uint8_t bytes[CA_MANAGER_SHA256_SIZE],
+                                char out[CA_MANAGER_SHA256_HEX_SIZE])
+{
+    static const char hex_chars[] = "0123456789abcdef";
+    for (size_t i = 0; i < CA_MANAGER_SHA256_SIZE; i++) {
+        out[i * 2] = hex_chars[bytes[i] >> 4];
+        out[i * 2 + 1] = hex_chars[bytes[i] & 0x0f];
+    }
+    out[CA_MANAGER_SHA256_HEX_SIZE - 1] = '\0';
 }
 
 static void build_path(char *out, size_t out_size, const char *filename)
@@ -59,6 +106,11 @@ static void build_default_paths(char *active_path, size_t active_size,
 static void build_version_path(char *version_path, size_t version_size)
 {
     build_path(version_path, version_size, CONFIG_CA_UPDATER_VERSION_FILENAME);
+}
+
+static void build_version_temp_path(char *version_temp_path, size_t version_temp_size)
+{
+    build_path(version_temp_path, version_temp_size, CONFIG_CA_UPDATER_VERSION_FILENAME ".tmp");
 }
 
 static bool file_exists(const char *path)
@@ -195,6 +247,14 @@ static esp_err_t recover_interrupted_promotion(void)
         unlink(temp_path);
     }
 
+    char version_path[128];
+    build_version_path(version_path, sizeof(version_path));
+    char version_temp_path[128];
+    build_version_temp_path(version_temp_path, sizeof(version_temp_path));
+    if (file_exists(version_temp_path)) {
+        unlink(version_temp_path);
+    }
+
     return ESP_OK;
 }
 
@@ -298,10 +358,17 @@ static esp_err_t copy_file(const char *source_path, const char *dest_path, size_
     return err;
 }
 
-static esp_err_t validate_and_promote(ca_manager_update_ctx_t *ctx, bool restart_on_success)
+static esp_err_t validate_and_promote(ca_manager_update_ctx_t *ctx,
+                                      bool restart_on_success,
+                                      bool *out_promoted)
 {
     if (ctx == NULL || !ctx->active) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    ctx->promoted = false;
+    if (out_promoted != NULL) {
+        *out_promoted = false;
     }
 
     if (ctx->expected_size > 0 && ctx->written_size != ctx->expected_size) {
@@ -360,6 +427,10 @@ static esp_err_t validate_and_promote(ca_manager_update_ctx_t *ctx, bool restart
     }
 
     free(old_bundle);
+    ctx->promoted = true;
+    if (out_promoted != NULL) {
+        *out_promoted = true;
+    }
 
     if (restart_on_success) {
         ESP_LOGI(TAG, "CA bundle updated successfully; restarting");
@@ -430,27 +501,39 @@ esp_err_t ca_manager_set_active_version(const char *version)
 
     char version_path[128];
     build_version_path(version_path, sizeof(version_path));
+    char temp_path[128];
+    build_version_temp_path(temp_path, sizeof(temp_path));
 
-    FILE *file = fopen(version_path, "w");
+    FILE *file = fopen(temp_path, "w");
     if (file == NULL) {
-        ESP_LOGE(TAG, "Failed to open version file %s: errno=%d", version_path, errno);
+        ESP_LOGE(TAG, "Failed to open version file %s: errno=%d", temp_path, errno);
         return ESP_FAIL;
     }
 
     if (fprintf(file, "%s\n", version) < 0) {
-        ESP_LOGE(TAG, "Failed to write version file %s: errno=%d", version_path, errno);
+        ESP_LOGE(TAG, "Failed to write version file %s: errno=%d", temp_path, errno);
         fclose(file);
+        unlink(temp_path);
         return ESP_FAIL;
     }
 
     if (fflush(file) != 0 || fsync(fileno(file)) != 0) {
-        ESP_LOGE(TAG, "Failed to sync version file %s: errno=%d", version_path, errno);
+        ESP_LOGE(TAG, "Failed to sync version file %s: errno=%d", temp_path, errno);
         fclose(file);
+        unlink(temp_path);
         return ESP_FAIL;
     }
 
     if (fclose(file) != 0) {
-        ESP_LOGE(TAG, "Failed to close version file %s: errno=%d", version_path, errno);
+        ESP_LOGE(TAG, "Failed to close version file %s: errno=%d", temp_path, errno);
+        unlink(temp_path);
+        return ESP_FAIL;
+    }
+
+    if (rename(temp_path, version_path) != 0) {
+        ESP_LOGE(TAG, "Failed to promote version file %s -> %s: errno=%d",
+                 temp_path, version_path, errno);
+        unlink(temp_path);
         return ESP_FAIL;
     }
 
@@ -517,10 +600,16 @@ esp_err_t ca_manager_update_write(ca_manager_update_ctx_t *ctx, const uint8_t *d
     return ESP_OK;
 }
 
-esp_err_t ca_manager_update_finish(ca_manager_update_ctx_t *ctx, bool restart_on_success)
+static esp_err_t finish_update(ca_manager_update_ctx_t *ctx,
+                               bool restart_on_success,
+                               bool *out_promoted)
 {
     if (ctx == NULL || !ctx->active || ctx->file == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (out_promoted != NULL) {
+        *out_promoted = false;
     }
 
     esp_err_t err = ESP_OK;
@@ -542,7 +631,7 @@ esp_err_t ca_manager_update_finish(ca_manager_update_ctx_t *ctx, bool restart_on
     ctx->file = NULL;
 
     if (err == ESP_OK) {
-        err = validate_and_promote(ctx, restart_on_success);
+        err = validate_and_promote(ctx, restart_on_success, out_promoted);
     }
 
     if (err != ESP_OK) {
@@ -552,6 +641,11 @@ esp_err_t ca_manager_update_finish(ca_manager_update_ctx_t *ctx, bool restart_on
     ctx->active = false;
     free(ctx);
     return err;
+}
+
+esp_err_t ca_manager_update_finish(ca_manager_update_ctx_t *ctx, bool restart_on_success)
+{
+    return finish_update(ctx, restart_on_success, NULL);
 }
 
 void ca_manager_update_abort(ca_manager_update_ctx_t *ctx)
@@ -607,7 +701,7 @@ esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success)
 
     esp_err_t err = copy_file(path, ctx->temp_path, &ctx->written_size);
     if (err == ESP_OK) {
-        err = validate_and_promote(ctx, restart_on_success);
+        err = validate_and_promote(ctx, restart_on_success, NULL);
     }
 
     if (err != ESP_OK) {
@@ -619,11 +713,28 @@ esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success)
     return err;
 }
 
-esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_success)
+esp_err_t ca_manager_update_from_http_client_verified(const char *url,
+                                                      const char *expected_sha256_hex,
+                                                      bool restart_on_success,
+                                                      bool *out_promoted)
 {
     if (url == NULL || url[0] == '\0') {
         ESP_LOGW(TAG, "Bundle URL is empty; nothing to update");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (out_promoted != NULL) {
+        *out_promoted = false;
+    }
+
+    uint8_t expected_sha256[CA_MANAGER_SHA256_SIZE];
+    bool verify_sha256 = expected_sha256_hex != NULL && expected_sha256_hex[0] != '\0';
+    if (verify_sha256) {
+        esp_err_t parse_err = sha256_hex_to_bytes(expected_sha256_hex, expected_sha256);
+        if (parse_err != ESP_OK) {
+            ESP_LOGE(TAG, "Invalid expected SHA-256: %s", expected_sha256_hex);
+            return parse_err;
+        }
     }
 
     esp_http_client_config_t config = {
@@ -643,6 +754,13 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
     ca_manager_update_ctx_t *ctx = NULL;
     uint8_t *buffer = NULL;
     esp_err_t err = ESP_OK;
+    mbedtls_sha256_context sha_ctx;
+    mbedtls_sha256_init(&sha_ctx);
+    if (verify_sha256 && mbedtls_sha256_starts(&sha_ctx, 0) != 0) {
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+
     int64_t content_length = 0;
     int status = 0;
     for (int redirect_count = 0; redirect_count <= CA_MANAGER_MAX_HTTP_REDIRECTS; redirect_count++) {
@@ -722,12 +840,34 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
         if (err != ESP_OK) {
             goto cleanup;
         }
+        if (verify_sha256 && mbedtls_sha256_update(&sha_ctx, buffer, (size_t)read_len) != 0) {
+            err = ESP_FAIL;
+            goto cleanup;
+        }
     }
 
-    err = ca_manager_update_finish(ctx, restart_on_success);
+    if (verify_sha256) {
+        uint8_t actual_sha256[CA_MANAGER_SHA256_SIZE];
+        if (mbedtls_sha256_finish(&sha_ctx, actual_sha256) != 0) {
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        if (memcmp(actual_sha256, expected_sha256, sizeof(actual_sha256)) != 0) {
+            char actual_hex[CA_MANAGER_SHA256_HEX_SIZE];
+            sha256_bytes_to_hex(actual_sha256, actual_hex);
+            ESP_LOGE(TAG, "SHA-256 mismatch: expected=%s actual=%s",
+                     expected_sha256_hex, actual_hex);
+            err = ESP_ERR_INVALID_CRC;
+            goto cleanup;
+        }
+    }
+
+    err = finish_update(ctx, restart_on_success, out_promoted);
     ctx = NULL;
 
 cleanup:
+    mbedtls_sha256_free(&sha_ctx);
     free(buffer);
     if (ctx != NULL) {
         ca_manager_update_abort(ctx);
@@ -735,6 +875,11 @@ cleanup:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     return err;
+}
+
+esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_success)
+{
+    return ca_manager_update_from_http_client_verified(url, NULL, restart_on_success, NULL);
 }
 
 esp_err_t ca_manager_download_text(const char *url, char *out_text, size_t out_size)

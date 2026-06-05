@@ -22,4 +22,11 @@ menu "Mozilla CA SPIFFS updater example"
             HTTPS URL that serves a small text file containing the current
             bundle version, for example "1.0.1".
 
+    config CA_UPDATER_SHA256_URL
+        string "Mozilla CA bundle SHA-256 URL"
+        default ""
+        help
+            HTTPS URL that serves a small text file containing the lowercase
+            SHA-256 hex digest of the bundle binary.
+
 endmenu

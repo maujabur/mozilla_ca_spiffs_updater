@@ -14,6 +14,7 @@
 *.hex
 *.img
 tools/certificate_prepare/bundle_ca.version
+tools/certificate_prepare/bundle_ca.sha256
 *.pem
 *.crt
 *.cer
