@@ -374,6 +374,8 @@ The key rule is that option 3 should emerge by adding new adapters and policies 
 
 Implement option 2 with component layout now:
 
+The first implementation increment is `components/ca_manager` plus `ca_manager_apply_file()`. The generic manifest updater and terminal test mode follow in later increments.
+
 - `components/ca_manager` as the clean CA core.
 - `components/manifest_file_updater` as the reusable apply-style updater.
 - `components/ca_manifest_updater` as the small adapter.

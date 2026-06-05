@@ -1,4 +1,4 @@
-menu "Mozilla CA SPIFFS updater"
+menu "Mozilla CA SPIFFS updater example"
 
     config CA_UPDATER_WIFI_SSID
         string "Wi-Fi SSID"
@@ -14,25 +14,5 @@ menu "Mozilla CA SPIFFS updater"
         help
             HTTPS URL that serves an ESP-IDF x509_crt_bundle binary generated
             from Mozilla public CA data.
-
-    config CA_UPDATER_STORAGE_LABEL
-        string "SPIFFS partition label"
-        default "ca_store"
-
-    config CA_UPDATER_SPIFFS_BASE_PATH
-        string "SPIFFS mount path"
-        default "/spiffs"
-
-    config CA_UPDATER_BUNDLE_FILENAME
-        string "Active bundle file"
-        default "bundle_ca.bin"
-
-    config CA_UPDATER_MAX_BUNDLE_SIZE
-        int "Maximum bundle download size"
-        default 262144
-
-    config CA_UPDATER_HTTP_TIMEOUT_MS
-        int "HTTP timeout in milliseconds"
-        default 15000
 
 endmenu

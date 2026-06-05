@@ -16,6 +16,7 @@ esp_err_t ca_manager_init(void);
 size_t ca_manager_get_active_bundle_size(void);
 
 esp_err_t ca_manager_update_from_stream(const uint8_t *data, size_t data_len, bool restart_on_success);
+esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success);
 
 esp_err_t ca_manager_update_begin(ca_manager_update_ctx_t **out_ctx, size_t expected_size);
 esp_err_t ca_manager_update_write(ca_manager_update_ctx_t *ctx, const uint8_t *data, size_t data_len);

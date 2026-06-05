@@ -214,6 +214,78 @@ static esp_err_t promote_temp_bundle(const char *temp_path, const char *active_p
     return ESP_OK;
 }
 
+static esp_err_t copy_file(const char *source_path, const char *dest_path, size_t *out_size)
+{
+    if (source_path == NULL || dest_path == NULL || out_size == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_size = 0;
+
+    FILE *source = fopen(source_path, "rb");
+    if (source == NULL) {
+        ESP_LOGE(TAG, "Failed to open source file %s: errno=%d", source_path, errno);
+        return ESP_FAIL;
+    }
+
+    FILE *dest = fopen(dest_path, "wb");
+    if (dest == NULL) {
+        ESP_LOGE(TAG, "Failed to open destination file %s: errno=%d", dest_path, errno);
+        fclose(source);
+        return ESP_FAIL;
+    }
+
+    uint8_t buffer[1024];
+    esp_err_t err = ESP_OK;
+
+    while (true) {
+        size_t read_len = fread(buffer, 1, sizeof(buffer), source);
+        if (read_len > 0) {
+            if (*out_size > CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE ||
+                read_len > CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE - *out_size) {
+                ESP_LOGE(TAG, "Source bundle exceeds maximum size");
+                err = ESP_ERR_INVALID_SIZE;
+                break;
+            }
+
+            size_t written = fwrite(buffer, 1, read_len, dest);
+            if (written != read_len) {
+                ESP_LOGE(TAG, "Failed to copy bundle file: errno=%d", errno);
+                err = ESP_FAIL;
+                break;
+            }
+
+            *out_size += written;
+        }
+
+        if (read_len < sizeof(buffer)) {
+            if (ferror(source)) {
+                ESP_LOGE(TAG, "Failed to read source file %s: errno=%d", source_path, errno);
+                err = ESP_FAIL;
+            }
+            break;
+        }
+    }
+
+    if (fflush(dest) != 0 && err == ESP_OK) {
+        ESP_LOGE(TAG, "Failed to flush copied bundle: errno=%d", errno);
+        err = ESP_FAIL;
+    }
+
+    if (err == ESP_OK && fsync(fileno(dest)) != 0) {
+        ESP_LOGE(TAG, "Failed to sync copied bundle: errno=%d", errno);
+        err = ESP_FAIL;
+    }
+
+    if (fclose(dest) != 0 && err == ESP_OK) {
+        ESP_LOGE(TAG, "Failed to close copied bundle: errno=%d", errno);
+        err = ESP_FAIL;
+    }
+
+    fclose(source);
+    return err;
+}
+
 static esp_err_t validate_and_promote(ca_manager_update_ctx_t *ctx, bool restart_on_success)
 {
     if (ctx == NULL || !ctx->active) {
@@ -430,6 +502,37 @@ esp_err_t ca_manager_update_from_stream(const uint8_t *data, size_t data_len, bo
         ca_manager_update_abort(ctx);
     }
 
+    return err;
+}
+
+esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success)
+{
+    if (path == NULL || path[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ca_manager_update_ctx_t *ctx = NULL;
+    ESP_RETURN_ON_ERROR(ca_manager_update_begin(&ctx, 0), TAG, "Failed to begin file apply");
+
+    FILE *temp_file = ctx->file;
+    ctx->file = NULL;
+    if (fclose(temp_file) != 0) {
+        ESP_LOGE(TAG, "Failed to close temp file before apply copy: errno=%d", errno);
+        ca_manager_update_abort(ctx);
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = copy_file(path, ctx->temp_path, &ctx->written_size);
+    if (err == ESP_OK) {
+        err = validate_and_promote(ctx, restart_on_success);
+    }
+
+    if (err != ESP_OK) {
+        unlink(ctx->temp_path);
+    }
+
+    ctx->active = false;
+    free(ctx);
     return err;
 }
 

@@ -2,6 +2,8 @@
 
 Projeto ESP-IDF independente para gerenciar, em tempo de execucao, um bundle publico de CAs da Mozilla armazenado em uma particao SPIFFS.
 
+O codigo reutilizavel fica em `components/ca_manager`. O diretorio `main/` contem um app de exemplo para ESP32/ESP32-S3 que configura Wi-Fi e demonstra o fluxo de atualizacao.
+
 Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`dependencies.lock`). O devcontainer deste projeto fica pinado em `espressif/idf:v6.2.0`.
 
 ## Fluxo
@@ -19,9 +21,11 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 
 Abra `idf.py menuconfig` e ajuste:
 
-- `Mozilla CA SPIFFS updater > Wi-Fi SSID`
-- `Mozilla CA SPIFFS updater > Wi-Fi password`
-- `Mozilla CA SPIFFS updater > Mozilla CA bundle binary URL`
+- `Mozilla CA SPIFFS updater example > Wi-Fi SSID`
+- `Mozilla CA SPIFFS updater example > Wi-Fi password`
+- `Mozilla CA SPIFFS updater example > Mozilla CA bundle binary URL`
+
+As opcoes de storage do componente ficam em `CA manager`.
 
 A URL deve servir um arquivo binario no formato `x509_crt_bundle` do ESP-IDF, gerado pelo script `components/mbedtls/esp_crt_bundle/gen_crt_bundle.py` a partir das CAs publicas da Mozilla. Nao use um arquivo PEM concatenado diretamente; `esp_crt_bundle_set()` espera o formato binario ordenado do ESP-IDF. No ESP-IDF v6.2, mantenha o bundle ordenado por subject name para a busca binaria em tempo de execucao.
 
@@ -92,3 +96,4 @@ idf.py -p /dev/ttyACM0 flash monitor
 - O app mantem o buffer do bundle ativo em RAM, pois o ESP-IDF recebe um ponteiro para o binario do bundle.
 - Clientes HTTPS, OTA e MQTT que usam `.crt_bundle_attach = esp_crt_bundle_attach` passam a usar o bundle ativado por `esp_crt_bundle_set()`.
 - Se o download falhar ou o bundle novo for invalido, o arquivo ativo anterior permanece preservado.
+- Para integracao com atualizadores baseados em manifesto, prefira `ca_manager_apply_file(path, restart_on_success)`: a camada externa baixa e verifica o artefato, e o `ca_manager` valida semanticamente o bundle antes de promove-lo.

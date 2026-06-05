@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "ca_manager.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_http_client
+        mbedtls
+        spiffs
+)
