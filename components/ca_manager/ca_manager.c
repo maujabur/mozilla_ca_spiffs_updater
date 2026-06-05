@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 
 #define CA_MANAGER_DOWNLOAD_BUFFER_SIZE 4096
+#define CA_MANAGER_MAX_HTTP_REDIRECTS 5
 
 struct ca_manager_update_ctx {
     FILE *file;
@@ -31,6 +32,11 @@ static const char *TAG = "ca_manager";
 static uint8_t *s_active_bundle;
 static size_t s_active_bundle_size;
 static bool s_spiffs_mounted;
+
+static bool is_http_redirect_status(int status)
+{
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
 
 static void build_path(char *out, size_t out_size, const char *filename)
 {
@@ -548,6 +554,7 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
         .timeout_ms = CONFIG_CA_UPDATER_HTTP_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
+        .max_redirection_count = CA_MANAGER_MAX_HTTP_REDIRECTS,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -557,20 +564,50 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
 
     ca_manager_update_ctx_t *ctx = NULL;
     uint8_t *buffer = NULL;
-    esp_err_t err = esp_http_client_open(client, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
+    esp_err_t err = ESP_OK;
+    int64_t content_length = 0;
+    int status = 0;
+    for (int redirect_count = 0; redirect_count <= CA_MANAGER_MAX_HTTP_REDIRECTS; redirect_count++) {
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+
+        content_length = esp_http_client_fetch_headers(client);
+        if (content_length < 0) {
+            ESP_LOGE(TAG, "HTTP fetch headers failed: %lld", content_length);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        status = esp_http_client_get_status_code(client);
+        if (!is_http_redirect_status(status)) {
+            break;
+        }
+
+        ESP_LOGI(TAG, "Following HTTP redirect: status=%d", status);
+        err = esp_http_client_set_redirection(client);
+        esp_http_client_close(client);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP redirect failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+    }
+
+    if (status != 200) {
+        ESP_LOGE(TAG, "Unexpected HTTP status: %d", status);
+        err = ESP_FAIL;
         goto cleanup;
     }
 
-    int64_t content_length = esp_http_client_fetch_headers(client);
-    if (content_length <= 0 || content_length > CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE) {
+    if (content_length > CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE) {
         ESP_LOGE(TAG, "Invalid content length: %lld", content_length);
         err = ESP_ERR_INVALID_SIZE;
         goto cleanup;
     }
 
-    err = ca_manager_update_begin(&ctx, (size_t)content_length);
+    err = ca_manager_update_begin(&ctx, content_length > 0 ? (size_t)content_length : 0);
     if (err != ESP_OK) {
         goto cleanup;
     }
@@ -581,10 +618,13 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
         goto cleanup;
     }
 
-    while (ctx->written_size < (size_t)content_length) {
-        size_t remaining = (size_t)content_length - ctx->written_size;
-        int bytes_to_read = remaining < CA_MANAGER_DOWNLOAD_BUFFER_SIZE ?
+    while (content_length <= 0 || ctx->written_size < (size_t)content_length) {
+        int bytes_to_read = CA_MANAGER_DOWNLOAD_BUFFER_SIZE;
+        if (content_length > 0) {
+            size_t remaining = (size_t)content_length - ctx->written_size;
+            bytes_to_read = remaining < CA_MANAGER_DOWNLOAD_BUFFER_SIZE ?
                             (int)remaining : CA_MANAGER_DOWNLOAD_BUFFER_SIZE;
+        }
 
         int read_len = esp_http_client_read(client, (char *)buffer, bytes_to_read);
         if (read_len < 0) {
@@ -604,13 +644,6 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
         if (err != ESP_OK) {
             goto cleanup;
         }
-    }
-
-    int status = esp_http_client_get_status_code(client);
-    if (status != 200) {
-        ESP_LOGE(TAG, "Unexpected HTTP status: %d", status);
-        err = ESP_FAIL;
-        goto cleanup;
     }
 
     err = ca_manager_update_finish(ctx, restart_on_success);
