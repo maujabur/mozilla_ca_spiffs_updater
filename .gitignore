@@ -15,6 +15,7 @@
 *.img
 tools/certificate_prepare/bundle_ca.version
 tools/certificate_prepare/bundle_ca.sha256
+tools/certificate_prepare/bundle_ca.manifest.json
 *.pem
 *.crt
 *.cer

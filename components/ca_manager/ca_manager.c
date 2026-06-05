@@ -113,6 +113,11 @@ static void build_version_temp_path(char *version_temp_path, size_t version_temp
     build_path(version_temp_path, version_temp_size, CONFIG_CA_UPDATER_VERSION_FILENAME ".tmp");
 }
 
+static void build_version_backup_path(char *version_backup_path, size_t version_backup_size)
+{
+    build_path(version_backup_path, version_backup_size, CONFIG_CA_UPDATER_VERSION_FILENAME ".bak");
+}
+
 static bool file_exists(const char *path)
 {
     struct stat st;
@@ -249,6 +254,20 @@ static esp_err_t recover_interrupted_promotion(void)
 
     char version_path[128];
     build_version_path(version_path, sizeof(version_path));
+    char version_backup_path[128];
+    build_version_backup_path(version_backup_path, sizeof(version_backup_path));
+    if (!file_exists(version_path) && file_exists(version_backup_path)) {
+        if (rename(version_backup_path, version_path) != 0) {
+            ESP_LOGE(TAG, "Failed to recover backup version: errno=%d", errno);
+            return ESP_FAIL;
+        }
+        ESP_LOGW(TAG, "Recovered CA bundle version from backup");
+    }
+
+    if (file_exists(version_path) && file_exists(version_backup_path)) {
+        unlink(version_backup_path);
+    }
+
     char version_temp_path[128];
     build_version_temp_path(version_temp_path, sizeof(version_temp_path));
     if (file_exists(version_temp_path)) {
@@ -283,6 +302,34 @@ static esp_err_t promote_temp_bundle(const char *temp_path, const char *active_p
     }
 
     ESP_LOGI(TAG, "Bundle update promoted to %s", active_path);
+    return ESP_OK;
+}
+
+static esp_err_t promote_temp_version_file(const char *temp_path, const char *version_path)
+{
+    char backup_path[128];
+    build_version_backup_path(backup_path, sizeof(backup_path));
+    unlink(backup_path);
+
+    bool has_version = file_exists(version_path);
+    if (has_version && rename(version_path, backup_path) != 0) {
+        ESP_LOGE(TAG, "Failed to stage old version as backup: errno=%d", errno);
+        return ESP_FAIL;
+    }
+
+    if (rename(temp_path, version_path) != 0) {
+        ESP_LOGE(TAG, "Failed to promote version file %s -> %s: errno=%d",
+                 temp_path, version_path, errno);
+        if (has_version && rename(backup_path, version_path) != 0) {
+            ESP_LOGE(TAG, "Failed to restore previous version file: errno=%d", errno);
+        }
+        return ESP_FAIL;
+    }
+
+    if (has_version) {
+        unlink(backup_path);
+    }
+
     return ESP_OK;
 }
 
@@ -530,14 +577,37 @@ esp_err_t ca_manager_set_active_version(const char *version)
         return ESP_FAIL;
     }
 
-    if (rename(temp_path, version_path) != 0) {
-        ESP_LOGE(TAG, "Failed to promote version file %s -> %s: errno=%d",
-                 temp_path, version_path, errno);
+    if (promote_temp_version_file(temp_path, version_path) != ESP_OK) {
         unlink(temp_path);
         return ESP_FAIL;
     }
 
     ESP_LOGI(TAG, "Stored CA bundle version %s", version);
+    return ESP_OK;
+}
+
+esp_err_t ca_manager_active_bundle_matches_sha256(const char *expected_sha256_hex, bool *out_matches)
+{
+    if (expected_sha256_hex == NULL || out_matches == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_matches = false;
+
+    uint8_t expected_sha256[CA_MANAGER_SHA256_SIZE];
+    ESP_RETURN_ON_ERROR(sha256_hex_to_bytes(expected_sha256_hex, expected_sha256),
+                        TAG, "Invalid expected SHA-256");
+
+    if (s_active_bundle == NULL || s_active_bundle_size == 0) {
+        return ESP_OK;
+    }
+
+    uint8_t actual_sha256[CA_MANAGER_SHA256_SIZE];
+    if (mbedtls_sha256(s_active_bundle, s_active_bundle_size, actual_sha256, 0) != 0) {
+        return ESP_FAIL;
+    }
+
+    *out_matches = memcmp(actual_sha256, expected_sha256, sizeof(actual_sha256)) == 0;
     return ESP_OK;
 }
 

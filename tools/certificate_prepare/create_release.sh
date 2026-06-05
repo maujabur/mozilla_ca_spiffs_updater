@@ -20,6 +20,7 @@ TAG="v${VERSION}"
 BIN_FILE="${SCRIPT_DIR}/bundle_ca.bin"
 VERSION_FILE="${SCRIPT_DIR}/bundle_ca.version"
 SHA256_FILE="${SCRIPT_DIR}/bundle_ca.sha256"
+MANIFEST_FILE="${SCRIPT_DIR}/bundle_ca.manifest.json"
 TITLE="Mozilla CA bundle ${TAG}"
 NOTES="Release ${TAG}"
 
@@ -40,6 +41,9 @@ if [[ ! -f "${BIN_FILE}" ]]; then
   exit 1
 fi
 
+REPO_URL="$(gh repo view --json url -q .url)"
+BIN_URL="${REPO_URL}/releases/download/${TAG}/bundle_ca.bin"
+
 if command -v sha256sum >/dev/null 2>&1; then
   SHA256="$(sha256sum "${BIN_FILE}" | awk '{print $1}')"
 elif command -v shasum >/dev/null 2>&1; then
@@ -49,14 +53,31 @@ else
   exit 1
 fi
 
+if stat -c '%s' "${BIN_FILE}" >/dev/null 2>&1; then
+  BIN_SIZE="$(stat -c '%s' "${BIN_FILE}")"
+else
+  BIN_SIZE="$(stat -f '%z' "${BIN_FILE}")"
+fi
+
 printf "%s\n" "${VERSION}" > "${VERSION_FILE}"
 printf "%s\n" "${SHA256}" > "${SHA256_FILE}"
+cat > "${MANIFEST_FILE}" <<EOF
+{
+  "schema": 1,
+  "artifact_type": "ca_bundle",
+  "version": "${VERSION}",
+  "url": "${BIN_URL}",
+  "sha256": "${SHA256}",
+  "size": ${BIN_SIZE}
+}
+EOF
 
 echo "Criando release ${TAG}"
 echo "Arquivo: ${BIN_FILE}"
 echo "Versao: ${VERSION_FILE}"
 echo "SHA-256: ${SHA256_FILE}"
+echo "Manifest: ${MANIFEST_FILE}"
 echo "Titulo: ${TITLE}"
 echo "Notas: ${NOTES}"
 
-gh release create "${TAG}" "${BIN_FILE}" "${VERSION_FILE}" "${SHA256_FILE}" --title "${TITLE}" --notes "${NOTES}"
+gh release create "${TAG}" "${BIN_FILE}" "${VERSION_FILE}" "${SHA256_FILE}" "${MANIFEST_FILE}" --title "${TITLE}" --notes "${NOTES}"

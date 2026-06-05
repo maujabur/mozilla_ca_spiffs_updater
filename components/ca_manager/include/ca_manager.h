@@ -16,6 +16,7 @@ esp_err_t ca_manager_init(void);
 size_t ca_manager_get_active_bundle_size(void);
 esp_err_t ca_manager_get_active_version(char *out_version, size_t out_size);
 esp_err_t ca_manager_set_active_version(const char *version);
+esp_err_t ca_manager_active_bundle_matches_sha256(const char *expected_sha256_hex, bool *out_matches);
 
 esp_err_t ca_manager_update_from_stream(const uint8_t *data, size_t data_len, bool restart_on_success);
 esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success);

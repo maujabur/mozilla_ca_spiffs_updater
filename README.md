@@ -12,14 +12,15 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 2. Tenta carregar `/spiffs/bundle_ca.bin` e ativar com `esp_crt_bundle_set()`.
 3. Se nao houver bundle valido em SPIFFS, usa o bundle embutido do ESP-IDF como fallback.
 4. Conecta ao Wi-Fi configurado.
-5. Baixa `bundle_ca.version` de uma URL HTTPS configurada e compara com a versao salva em SPIFFS.
-6. Se a versao mudou, baixa `bundle_ca.sha256`.
-7. Baixa um novo `bundle_ca.bin` para `/spiffs/bundle_ca.bin.tmp`.
-8. Confere o SHA-256 do binario baixado.
-9. Valida o binario chamando `esp_crt_bundle_set()`.
-10. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se as validacoes passarem.
-11. Salva a nova versao em `/spiffs/bundle_ca.version`.
-12. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
+5. Baixa `bundle_ca.manifest.json` de uma URL HTTPS configurada.
+6. Compara `version` com a versao salva em SPIFFS.
+7. Se a versao mudou, compara o `sha256` do manifest com o bundle ativo em memoria.
+8. Se o bundle ativo nao bater, baixa o `url` do manifest para `/spiffs/bundle_ca.bin.tmp`.
+9. Confere o SHA-256 do binario baixado.
+10. Valida o binario chamando `esp_crt_bundle_set()`.
+11. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se as validacoes passarem.
+12. Salva a nova versao em `/spiffs/bundle_ca.version`.
+13. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
 
 ## Configuracao
 
@@ -27,9 +28,7 @@ Abra `idf.py menuconfig` e ajuste:
 
 - `Mozilla CA SPIFFS updater example > Wi-Fi SSID`
 - `Mozilla CA SPIFFS updater example > Wi-Fi password`
-- `Mozilla CA SPIFFS updater example > Mozilla CA bundle binary URL`
-- `Mozilla CA SPIFFS updater example > Mozilla CA bundle version URL`
-- `Mozilla CA SPIFFS updater example > Mozilla CA bundle SHA-256 URL`
+- `Mozilla CA SPIFFS updater example > Mozilla CA bundle manifest URL`
 
 As opcoes de storage do componente ficam em `CA manager`.
 
@@ -40,12 +39,10 @@ O diretorio `tools/certificate_prepare` contem um preparador Python para gerar e
 Para GitHub Releases, configure URLs estaveis usando `latest/download`:
 
 ```text
-https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.version
-https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.sha256
-https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.bin
+https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.manifest.json
 ```
 
-O script de release gera e publica os dois assets:
+O script de release gera e publica `bundle_ca.manifest.json`, `bundle_ca.bin`, `bundle_ca.version` e `bundle_ca.sha256`:
 
 ```bash
 tools/certificate_prepare/create_release.sh 1.0.1

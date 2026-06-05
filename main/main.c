@@ -1,3 +1,5 @@
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ca_manager.h"
@@ -18,6 +20,15 @@
 #define CA_VERSION_BUFFER_SIZE 32
 #define CA_SHA256_HEX_SIZE 64
 #define CA_SHA256_BUFFER_SIZE 80
+#define CA_URL_BUFFER_SIZE 256
+#define CA_MANIFEST_BUFFER_SIZE 1024
+
+typedef struct {
+    char version[CA_VERSION_BUFFER_SIZE];
+    char url[CA_URL_BUFFER_SIZE];
+    char sha256[CA_SHA256_BUFFER_SIZE];
+    size_t size;
+} ca_bundle_manifest_t;
 
 static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
@@ -98,20 +109,146 @@ static void trim_text(char *text)
     text[strcspn(text, "\r\n\t ")] = '\0';
 }
 
-static esp_err_t update_bundle_if_needed(void)
+static const char *skip_json_ws(const char *cursor)
 {
-    if (strlen(CONFIG_CA_UPDATER_VERSION_URL) == 0) {
-        ESP_LOGW(TAG, "Version URL is empty; using direct bundle update");
-        return ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, true);
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') {
+        cursor++;
+    }
+    return cursor;
+}
+
+static const char *find_json_value(const char *json, const char *name)
+{
+    char key[48];
+    int written = snprintf(key, sizeof(key), "\"%s\"", name);
+    if (written < 0 || (size_t)written >= sizeof(key)) {
+        return NULL;
     }
 
-    char remote_version[CA_VERSION_BUFFER_SIZE];
+    const char *cursor = strstr(json, key);
+    if (cursor == NULL) {
+        return NULL;
+    }
+
+    cursor += strlen(key);
+    cursor = skip_json_ws(cursor);
+    if (*cursor != ':') {
+        return NULL;
+    }
+
+    return skip_json_ws(cursor + 1);
+}
+
+static esp_err_t copy_json_string(const char *json, const char *name, char *out, size_t out_size)
+{
+    const char *value = find_json_value(json, name);
+    if (value == NULL || *value != '"') {
+        ESP_LOGE(TAG, "Manifest field is missing or invalid: %s", name);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    value++;
+    size_t len = 0;
+    while (value[len] != '\0' && value[len] != '"') {
+        if (value[len] == '\\') {
+            ESP_LOGE(TAG, "Escaped strings are not supported in manifest field: %s", name);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        len++;
+    }
+
+    if (value[len] != '"') {
+        ESP_LOGE(TAG, "Unterminated manifest field: %s", name);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (len == 0 || len >= out_size) {
+        ESP_LOGE(TAG, "Manifest field is too long: %s", name);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    memcpy(out, value, len);
+    out[len] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t read_json_int(const char *json, const char *name, int *out_value)
+{
+    const char *value = find_json_value(json, name);
+    if (value == NULL || *value < '0' || *value > '9') {
+        ESP_LOGE(TAG, "Manifest number is missing or invalid: %s", name);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    char *end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (end == value || parsed <= 0 || parsed > INT32_MAX) {
+        ESP_LOGE(TAG, "Manifest number is out of range: %s", name);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    *out_value = (int)parsed;
+    return ESP_OK;
+}
+
+static esp_err_t parse_manifest(const char *manifest_text, ca_bundle_manifest_t *manifest)
+{
+    if (manifest_text == NULL || manifest == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(manifest, 0, sizeof(*manifest));
+
+    int schema = 0;
+    ESP_RETURN_ON_ERROR(read_json_int(manifest_text, "schema", &schema),
+                        TAG, "Invalid manifest schema");
+    if (schema != 1) {
+        ESP_LOGE(TAG, "Unsupported manifest schema: %d", schema);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    char artifact_type[24];
+    esp_err_t err = copy_json_string(manifest_text, "artifact_type", artifact_type, sizeof(artifact_type));
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (strcmp(artifact_type, "ca_bundle") != 0) {
+        ESP_LOGE(TAG, "Unexpected manifest artifact_type: %s", artifact_type);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    ESP_RETURN_ON_ERROR(copy_json_string(manifest_text, "version", manifest->version, sizeof(manifest->version)),
+                        TAG, "Invalid manifest version");
+    ESP_RETURN_ON_ERROR(copy_json_string(manifest_text, "url", manifest->url, sizeof(manifest->url)),
+                        TAG, "Invalid manifest URL");
+    ESP_RETURN_ON_ERROR(copy_json_string(manifest_text, "sha256", manifest->sha256, sizeof(manifest->sha256)),
+                        TAG, "Invalid manifest SHA-256");
+
+    if (strlen(manifest->sha256) != CA_SHA256_HEX_SIZE) {
+        ESP_LOGE(TAG, "Manifest SHA-256 is invalid: %s", manifest->sha256);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    int size = 0;
+    ESP_RETURN_ON_ERROR(read_json_int(manifest_text, "size", &size),
+                        TAG, "Invalid manifest size");
+    manifest->size = (size_t)size;
+    return ESP_OK;
+}
+
+static esp_err_t load_manifest(ca_bundle_manifest_t *manifest)
+{
+    if (strlen(CONFIG_CA_UPDATER_VERSION_URL) == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(manifest, 0, sizeof(*manifest));
     ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_VERSION_URL,
-                                                 remote_version,
-                                                 sizeof(remote_version)),
+                                                 manifest->version,
+                                                 sizeof(manifest->version)),
                         TAG, "Failed to download CA bundle version");
-    trim_text(remote_version);
-    if (remote_version[0] == '\0') {
+    trim_text(manifest->version);
+    if (manifest->version[0] == '\0') {
         ESP_LOGE(TAG, "Downloaded CA bundle version is empty");
         return ESP_ERR_INVALID_RESPONSE;
     }
@@ -121,20 +258,39 @@ static esp_err_t update_bundle_if_needed(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    char remote_sha256[CA_SHA256_BUFFER_SIZE];
     ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_SHA256_URL,
-                                                 remote_sha256,
-                                                 sizeof(remote_sha256)),
+                                                 manifest->sha256,
+                                                 sizeof(manifest->sha256)),
                         TAG, "Failed to download CA bundle SHA-256");
-    trim_text(remote_sha256);
-    if (strlen(remote_sha256) != CA_SHA256_HEX_SIZE) {
-        ESP_LOGE(TAG, "Downloaded CA bundle SHA-256 is invalid: %s", remote_sha256);
+    trim_text(manifest->sha256);
+    if (strlen(manifest->sha256) != CA_SHA256_HEX_SIZE) {
+        ESP_LOGE(TAG, "Downloaded CA bundle SHA-256 is invalid: %s", manifest->sha256);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
+    if (strlcpy(manifest->url, CONFIG_CA_UPDATER_BUNDLE_URL, sizeof(manifest->url)) >= sizeof(manifest->url)) {
+        ESP_LOGE(TAG, "Configured bundle URL is too long");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t load_manifest_from_json(ca_bundle_manifest_t *manifest)
+{
+    char manifest_text[CA_MANIFEST_BUFFER_SIZE];
+    ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_MANIFEST_URL,
+                                                 manifest_text,
+                                                 sizeof(manifest_text)),
+                        TAG, "Failed to download CA bundle manifest");
+    return parse_manifest(manifest_text, manifest);
+}
+
+static esp_err_t apply_manifest_if_needed(const ca_bundle_manifest_t *manifest)
+{
     char active_version[CA_VERSION_BUFFER_SIZE];
     esp_err_t err = ca_manager_get_active_version(active_version, sizeof(active_version));
-    if (err == ESP_OK && strcmp(active_version, remote_version) == 0) {
+    if (err == ESP_OK && strcmp(active_version, manifest->version) == 0) {
         ESP_LOGI(TAG, "CA bundle version %s is already active", active_version);
         return ESP_OK;
     }
@@ -144,26 +300,56 @@ static esp_err_t update_bundle_if_needed(void)
 
     ESP_LOGI(TAG, "Updating CA bundle version %s -> %s",
              active_version[0] != '\0' ? active_version : "(none)",
-             remote_version);
+             manifest->version);
 
-    bool promoted = false;
-    ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client_verified(CONFIG_CA_UPDATER_BUNDLE_URL,
-                                                                    remote_sha256,
-                                                                    false,
-                                                                    &promoted),
-                        TAG, "Bundle download/apply failed");
-    ESP_RETURN_ON_ERROR(ca_manager_set_active_version(remote_version),
-                        TAG, "Failed to store CA bundle version");
-
-    if (!promoted) {
-        ESP_LOGI(TAG, "CA bundle version corrected to %s; restart not needed", remote_version);
+    bool active_bundle_matches = false;
+    ESP_RETURN_ON_ERROR(ca_manager_active_bundle_matches_sha256(manifest->sha256,
+                                                                &active_bundle_matches),
+                        TAG, "Failed to compare active bundle SHA-256");
+    if (active_bundle_matches) {
+        ESP_LOGI(TAG, "Active CA bundle already matches remote SHA-256");
+        ESP_RETURN_ON_ERROR(ca_manager_set_active_version(manifest->version),
+                            TAG, "Failed to store CA bundle version");
+        ESP_LOGI(TAG, "CA bundle version corrected to %s; restart not needed", manifest->version);
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "CA bundle updated to version %s; restarting", remote_version);
+    bool promoted = false;
+    ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client_verified(manifest->url,
+                                                                    manifest->sha256,
+                                                                    false,
+                                                                    &promoted),
+                        TAG, "Bundle download/apply failed");
+    ESP_RETURN_ON_ERROR(ca_manager_set_active_version(manifest->version),
+                        TAG, "Failed to store CA bundle version");
+
+    if (!promoted) {
+        ESP_LOGI(TAG, "CA bundle version corrected to %s; restart not needed", manifest->version);
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "CA bundle updated to version %s; restarting", manifest->version);
     fflush(stdout);
     esp_restart();
     return ESP_OK;
+}
+
+static esp_err_t update_bundle_if_needed(void)
+{
+    ca_bundle_manifest_t manifest;
+
+    if (strlen(CONFIG_CA_UPDATER_MANIFEST_URL) != 0) {
+        ESP_RETURN_ON_ERROR(load_manifest_from_json(&manifest), TAG, "Manifest update metadata failed");
+        return apply_manifest_if_needed(&manifest);
+    }
+
+    ESP_LOGW(TAG, "Manifest URL is empty; using legacy version/SHA-256 URLs");
+    if (load_manifest(&manifest) == ESP_OK) {
+        return apply_manifest_if_needed(&manifest);
+    }
+
+    ESP_LOGW(TAG, "Legacy version URL is empty; using direct bundle update");
+    return ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, true);
 }
 
 void app_main(void)
