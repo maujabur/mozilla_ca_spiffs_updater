@@ -28,6 +28,7 @@
 #define CA_CONSOLE_STACK_SIZE 8192
 #define CA_HTTP_TX_BUFFER_SIZE 4096
 #define CA_MAX_HTTP_REDIRECTS 5
+#define CA_BOOT_HTTPS_TEST_URLS_BUFFER_SIZE 768
 
 typedef struct {
     char version[CA_VERSION_BUFFER_SIZE];
@@ -367,6 +368,63 @@ static void print_manifest(const ca_bundle_manifest_t *manifest)
     printf("size=%u\n", (unsigned)manifest->size);
 }
 
+static void trim_in_place(char *text)
+{
+    if (text == NULL) {
+        return;
+    }
+
+    char *start = text;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') {
+        start++;
+    }
+
+    if (start != text) {
+        memmove(text, start, strlen(start) + 1);
+    }
+
+    size_t len = strlen(text);
+    while (len > 0) {
+        char c = text[len - 1];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+            break;
+        }
+        text[--len] = '\0';
+    }
+}
+
+static void run_boot_https_diagnostics(void)
+{
+    char urls[CA_BOOT_HTTPS_TEST_URLS_BUFFER_SIZE];
+    if (strlcpy(urls, CONFIG_CA_UPDATER_BOOT_HTTPS_TEST_URLS, sizeof(urls)) >= sizeof(urls)) {
+        ESP_LOGE(TAG, "Boot HTTPS diagnostic URL list is too long");
+        return;
+    }
+
+    trim_in_place(urls);
+    if (urls[0] == '\0') {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Running boot HTTPS diagnostics");
+
+    char *saveptr = NULL;
+    for (char *url = strtok_r(urls, ",", &saveptr);
+         url != NULL;
+         url = strtok_r(NULL, ",", &saveptr)) {
+        trim_in_place(url);
+        if (url[0] == '\0') {
+            continue;
+        }
+
+        int status = 0;
+        int64_t content_length = 0;
+        esp_err_t err = probe_https_url(url, &status, &content_length);
+        ESP_LOGI(TAG, "HTTPS diagnostic url=%s status=%d content_length=%lld result=%s",
+                 url, status, content_length, esp_err_to_name(err));
+    }
+}
+
 static int ca_console_command(int argc, char **argv)
 {
     if (argc < 2 || strcmp(argv[1], "help") == 0) {
@@ -522,6 +580,7 @@ void app_main(void)
     log_active_bundle_state("Boot");
 
     if (connect_wifi() == ESP_OK) {
+        run_boot_https_diagnostics();
         err = update_bundle_if_needed();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Bundle update failed: %s", esp_err_to_name(err));

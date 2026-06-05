@@ -21,7 +21,8 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 11. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se as validacoes passarem.
 12. Salva a nova versao em `/spiffs/bundle_ca.version`.
 13. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
-14. Se habilitado, inicia um console de diagnostico para testes manuais.
+14. Se configurado, testa URLs HTTPS de diagnostico e registra o resultado no log.
+15. Se habilitado, inicia um console de diagnostico para testes manuais.
 
 ## Configuracao
 
@@ -31,6 +32,7 @@ Abra `idf.py menuconfig` e ajuste:
 - `Mozilla CA SPIFFS updater example > Wi-Fi password`
 - `Mozilla CA SPIFFS updater example > Mozilla CA bundle manifest URL`
 - `Mozilla CA SPIFFS updater example > Enable CA updater diagnostic console`
+- `Mozilla CA SPIFFS updater example > Boot HTTPS diagnostic URLs`
 
 As opcoes de storage do componente ficam em `CA manager`.
 
@@ -58,9 +60,16 @@ tools/certificate_prepare/create_release.sh 1.0.1 --prepare
 
 ## Console de diagnostico
 
-Quando `Enable CA updater diagnostic console` esta habilitado, o app inicia um
-prompt `ca>` depois do check de boot. Use `help` para listar comandos e `ca
-help` para os comandos especificos do updater.
+O app pode testar URLs HTTPS automaticamente no boot, sem depender de entrada
+interativa pela serial. Configure uma lista separada por virgulas em `Boot HTTPS
+diagnostic URLs`. Depois que o Wi-Fi conecta, o log mostra status HTTP,
+`content_length` e resultado TLS/HTTP de cada URL.
+
+Quando `Enable CA updater diagnostic console` esta habilitado, o app tambem
+inicia um prompt `ca>` depois do check de boot. Use `help` para listar comandos
+e `ca help` para os comandos especificos do updater. Essa opcao fica desligada
+por padrao porque alguns monitores seriais conseguem ler logs, mas nao enviam
+comandos de forma confiavel.
 
 ```text
 ca status
