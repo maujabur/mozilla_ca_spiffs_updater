@@ -1,0 +1,27 @@
+{
+	"name": "Mozilla CA SPIFFS Updater ESP-IDF 6.2.0",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"terminal.integrated.defaultProfile.linux": "bash",
+				"idf.gitPath": "/usr/bin/git"
+			},
+			"extensions": [
+				"espressif.esp-idf-extension",
+				"espressif.esp-idf-web",
+				"openai.chatgpt"
+			]
+		}
+	},
+	"runArgs": [
+		"--privileged",
+		"--device=/dev/ttyACM0",
+		"--volume=/dev:/dev",
+		"--group-add=dialout"
+	]
+}
+
+
