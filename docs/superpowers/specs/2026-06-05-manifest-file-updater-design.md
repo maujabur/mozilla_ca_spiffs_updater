@@ -213,6 +213,88 @@ The generic updater should distinguish:
 
 CA-specific apply failure must preserve the previous active CA bundle, matching the current `ca_manager` behavior.
 
+## ESP32 Test Strategy
+
+Testing on real ESP32/ESP32-S3 hardware should be planned as an explicit integration mode, not only as boot-time behavior. The example app should expose a small terminal-driven control surface so a developer can exercise manifest fetch, artifact download, apply, and failure cases without reflashing for each scenario.
+
+Recommended test interface:
+
+- A console command to fetch and print manifest metadata from a configured or typed URL.
+- A console command to run the full manifest update flow.
+- A console command to download and verify an artifact without applying it.
+- A console command to apply a previously downloaded local file.
+- A console command to print current CA bundle state, stored metadata, and last update result.
+
+This can be implemented with the ESP-IDF console component later, or with a simpler UART command loop if console setup feels too heavy for the first cut. The important design point is that update operations should be callable independently from boot.
+
+Useful HTTPS test cases:
+
+- Valid manifest and valid CA bundle.
+- Valid manifest pointing to an unchanged version.
+- Valid manifest with wrong `artifact_type`.
+- Valid manifest with wrong `sha256`.
+- Valid manifest with wrong `size`.
+- Manifest URL returning 404.
+- Artifact URL returning 404.
+- HTTPS endpoint with an expired or untrusted certificate.
+- Oversized manifest.
+- Oversized artifact.
+- Corrupted CA bundle with correct transport hash, proving that `ca_manager` semantic validation still rejects it.
+
+The device-side logs should make these cases distinguishable. A test run should be able to answer whether the failure happened during manifest fetch, manifest validation, artifact download, hash/size verification, or domain apply.
+
+## Periodic Manifest Checks
+
+Periodic checks should be a scheduling concern above the manifest updater, not part of the CA manager.
+
+Recommended first design:
+
+- `manifest_file_updater_run()` performs one update attempt and returns a precise result.
+- `ca_manifest_updater` may expose a convenience function for one CA update attempt.
+- The example app owns periodic scheduling with a FreeRTOS task or timer.
+- Backoff, jitter, and minimum interval are configured in the scheduling layer.
+
+This keeps the reusable updater deterministic and easy to test. It also lets different products choose different policies: check once at boot, check once after Wi-Fi connects, check every 24 hours, check only after SNTP time sync, or check when commanded from a console.
+
+Suggested periodic policy for the example app:
+
+- Run one check after Wi-Fi is connected and system time is valid.
+- If no update is needed, wait a long interval such as 24 hours.
+- If a transient network error occurs, retry with bounded exponential backoff.
+- If manifest or artifact validation fails, do not retry aggressively; wait for the normal interval or manual command.
+- If apply succeeds and restart is enabled, restart immediately.
+- If apply succeeds and restart is disabled, record success and continue.
+
+The updater should eventually persist last-check and last-result metadata, but this can be postponed until the manifest flow is working manually.
+
+## Decision Timing
+
+Not every open decision must be closed before implementation starts. The decisions that affect component boundaries and file movement should be decided now; policy details can stay configurable or be deferred.
+
+Decide now:
+
+- Use `components/` for reusable code and keep `main/` as the example app.
+- Use an apply-style callback as the primary manifest updater contract.
+- Keep `ca_manager` free of manifest, version, channel, and scheduling policy.
+- Add terminal-driven integration testing as an example-app feature.
+- Keep periodic scheduling outside `manifest_file_updater`.
+
+Can be decided during implementation:
+
+- Whether the test interface uses ESP-IDF console or a minimal UART command loop.
+- Whether `ca_manager_update_from_http_client()` is removed immediately or kept as a compatibility helper.
+- Whether the first version comparator is string equality only or callback-based.
+- Exact ESP-IDF error code mapping for each updater result.
+
+Can be postponed:
+
+- Signed manifests.
+- Multi-artifact manifests.
+- Persistent last-check metadata.
+- ETag or `If-None-Match`.
+- OTA adapter.
+- Extra storage backends.
+
 ## Migration Plan
 
 ### Phase 1: Component Layout
@@ -246,7 +328,20 @@ CA-specific apply failure must preserve the previous active CA bundle, matching 
 - Wire the adapter to `manifest_file_updater_run()`.
 - Update `main/main.c` to demonstrate manifest-driven CA update.
 
-### Phase 5: Tooling And Publishing
+### Phase 5: ESP32 Integration Test Mode
+
+- Add terminal commands in the example app for manifest fetch, full update, verify-only download, local apply, and status.
+- Document a set of local or hosted HTTPS URLs for success and failure scenarios.
+- Make boot-time automatic update optional so manual testing can run without immediate side effects.
+
+### Phase 6: Periodic Scheduling
+
+- Add an example FreeRTOS task or timer that runs one-shot CA manifest checks.
+- Gate checks on Wi-Fi readiness and, if needed, valid system time.
+- Add bounded retry/backoff for transient failures.
+- Keep scheduling policy out of `manifest_file_updater`.
+
+### Phase 7: Tooling And Publishing
 
 - Extend `tools/certificate_prepare` or add a sibling tool to emit a manifest for the generated `bundle_ca.bin`.
 - Include `version`, `build_id`, `size`, and `sha256`.
@@ -273,6 +368,7 @@ The key rule is that option 3 should emerge by adding new adapters and policies 
 - Whether the first version comparator is string equality only or accepts a callback.
 - Whether manifest signing is required in the first implementation or postponed until HTTPS plus SHA-256 is validated in practice.
 - Whether `version` for CA bundles should be date-based, Mozilla certdata revision based, or generated build timestamp based.
+- Whether the ESP32 manual test interface should use ESP-IDF console or a minimal UART command loop.
 
 ## Recommended First Cut
 
