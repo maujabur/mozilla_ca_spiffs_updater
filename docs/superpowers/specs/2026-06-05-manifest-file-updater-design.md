@@ -116,6 +116,68 @@ Suggested initial manifest fields:
 
 `artifact_type` is the key that keeps the generic updater extensible without making every domain share one meaning for `version`.
 
+The first cut may keep a single `url` field because it is simple and already
+matches the current release tooling. The schema should reserve a direct
+migration path to `urls`, where the artifact can be attempted from more than
+one HTTPS mirror.
+
+Suggested future manifest fields for mirrored and signed CA bundle delivery:
+
+```json
+{
+  "schema": 1,
+  "artifact_type": "ca_bundle",
+  "channel": "stable",
+  "version": "1.0.8",
+  "build_id": "2026-06-05T00:00:00Z-ca",
+  "urls": [
+    "https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/download/v1.0.8/bundle_ca.bin",
+    "https://updates.example.net/ca/stable/bundle_ca.bin"
+  ],
+  "sha256": "hexadecimal_sha256_do_arquivo",
+  "size": 56244,
+  "signature_algorithm": "ed25519",
+  "signing_key_id": "ca-bundle-2026",
+  "signature": "base64_assinatura_do_manifest_canonico"
+}
+```
+
+`url` and `urls` should not both be required. A compatibility parser can accept
+either one, normalize both into an internal URL list, and reject an empty list.
+URL validation should reject empty strings, malformed URLs, unsupported schemes,
+and strings longer than the configured manifest URL limit.
+
+## Trust Bootstrap And Mirrors
+
+CA bundle update has a bootstrapping paradox: the device may need a newer CA
+bundle to reach the HTTPS server that hosts the newer CA bundle. This project
+should treat that as an architecture concern, not only as an operational edge
+case.
+
+Multiple HTTPS mirrors are useful and should be added as an availability
+feature. Hosting the same artifact on providers with different certificate
+chains, such as GitHub Releases plus an object-storage CDN, reduces the chance
+that one expired or distrusted chain blocks every update. The device should try
+each mirror in order, applying the same size and SHA-256 checks to whichever
+download succeeds.
+
+Mirrors do not fully solve trust bootstrap. If the local trust store is too old
+for every HTTPS mirror, the device still cannot fetch the update. The long-term
+security boundary should be a signed manifest verified by a public key embedded
+in firmware. With a valid manifest signature, the manifest becomes the authority
+for artifact metadata, and the artifact can be accepted only if its size and
+SHA-256 match the signed metadata.
+
+The recommended policy is:
+
+- Keep HTTPS for the manifest and artifacts whenever possible.
+- Add `urls[]` mirror fallback for resilience.
+- Add manifest signatures before supporting any non-HTTPS artifact mirror.
+- Never trust a downloaded artifact only because it came from a mirror; always
+  verify size and SHA-256 from the manifest.
+- Plan signing key rotation with `signing_key_id` and firmware support for at
+  least the current and next public keys.
+
 ### `ca_manifest_updater`
 
 Connects the generic manifest updater to the CA manager:
@@ -136,9 +198,10 @@ The preferred update flow is:
 3. App calls `ca_manifest_updater_run(manifest_url, options)`.
 4. `ca_manifest_updater` builds a `manifest_file_updater` request for `artifact_type = "ca_bundle"`.
 5. `manifest_file_updater` downloads the manifest.
-6. `manifest_file_updater` validates schema, type, URL, size, and SHA-256.
+6. `manifest_file_updater` validates schema, type, URL list, size, and SHA-256.
 7. `manifest_file_updater` decides whether to download.
-8. `manifest_file_updater` downloads the artifact to its own temporary path.
+8. `manifest_file_updater` downloads the artifact to its own temporary path,
+   trying mirrors in order when more than one URL is available.
 9. `manifest_file_updater` verifies downloaded size and SHA-256.
 10. `manifest_file_updater` calls `apply(downloaded_path, user_ctx)`.
 11. `ca_manifest_updater` applies the file through `ca_manager_apply_file()`.
@@ -147,6 +210,10 @@ The preferred update flow is:
 The important boundary is that `manifest_file_updater` guarantees the file matches the manifest before calling `apply()`. The domain-specific component remains responsible for validating the file semantically.
 
 For CA bundles, SHA-256 and size prove transport integrity, while `esp_crt_bundle_set()` proves the file is actually usable as an ESP-IDF CA bundle.
+
+After manifest signing is implemented, signature verification must happen before
+the updater trusts any manifest metadata, including `url`, `urls`, `size`,
+`sha256`, `version`, and `critical`.
 
 ## Initial API Sketch
 
@@ -168,10 +235,15 @@ typedef struct {
     const char *version;
     const char *build_id;
     const char *url;
+    const char *const *urls;
+    size_t url_count;
     const char *sha256_hex;
     size_t size;
     const char *min_version;
     bool critical;
+    const char *signature_algorithm;
+    const char *signing_key_id;
+    const char *signature_b64;
 } manifest_file_artifact_t;
 
 typedef esp_err_t (*manifest_file_apply_fn)(const char *verified_path,
@@ -203,10 +275,13 @@ The generic updater should distinguish:
 - No update needed.
 - Manifest download failure.
 - Manifest JSON invalid.
+- Manifest signature invalid.
 - Unsupported schema.
 - Wrong artifact type.
 - Version policy rejected.
-- Artifact download failure.
+- Invalid or empty artifact URL list.
+- Artifact download failure on one mirror.
+- Artifact download failure on all mirrors.
 - Size mismatch.
 - SHA-256 mismatch.
 - Apply callback failure.
@@ -234,6 +309,10 @@ Useful HTTPS test cases:
 - Valid manifest with wrong `artifact_type`.
 - Valid manifest with wrong `sha256`.
 - Valid manifest with wrong `size`.
+- Valid manifest where primary artifact mirror fails and secondary succeeds.
+- Valid manifest where all artifact mirrors fail.
+- Valid signed manifest.
+- Manifest with invalid signature.
 - Manifest URL returning 404.
 - Artifact URL returning 404.
 - HTTPS endpoint with an expired or untrusted certificate.
@@ -288,7 +367,6 @@ Can be decided during implementation:
 
 Can be postponed:
 
-- Signed manifests.
 - Multi-artifact manifests.
 - Persistent last-check metadata.
 - ETag or `If-None-Match`.
@@ -321,6 +399,14 @@ Can be postponed:
 - Verify SHA-256 and size.
 - Call the provided `apply()` callback.
 
+### Phase 3.5: Mirror Fallback
+
+- Extend manifest parsing to accept either `url` or `urls`.
+- Normalize artifact locations into an internal URL list.
+- Reject empty, malformed, non-HTTPS, or overlong URLs.
+- Try mirrors in manifest order until one download verifies successfully.
+- Log which mirror failed and which mirror, if any, produced the accepted file.
+
 ### Phase 4: CA Manifest Adapter
 
 - Add `components/ca_manifest_updater`.
@@ -346,6 +432,17 @@ Can be postponed:
 - Extend `tools/certificate_prepare` or add a sibling tool to emit a manifest for the generated `bundle_ca.bin`.
 - Include `version`, `build_id`, `size`, and `sha256`.
 - Document how to host both manifest and binary.
+- Add release-script support for optional mirror URLs.
+
+### Phase 8: Signed Manifest Trust Boundary
+
+- Add firmware-embedded public signing key configuration.
+- Add manifest canonicalization rules for exactly what bytes are signed.
+- Add manifest signature verification before using artifact metadata.
+- Add `signature_algorithm`, `signing_key_id`, and `signature` fields.
+- Extend release tooling to sign `bundle_ca.manifest.json`.
+- Keep support for HTTPS mirrors; only consider non-HTTPS artifact URLs after
+  signed manifests are mandatory.
 
 ## Expansion Toward A Generic Framework
 
@@ -353,7 +450,7 @@ The path from option 2 to option 3 is additive:
 
 - Add `ota_manifest_updater` that uses the same manifest updater but applies via ESP-IDF OTA.
 - Add support for domain-specific version comparators.
-- Add signed manifests after the HTTPS-only version is working.
+- Add signed manifests after the HTTPS-only version and mirror fallback are working.
 - Add ETag or `If-None-Match` support for bandwidth reduction.
 - Add persistent update state for last check, last applied build, and failed build suppression.
 - Add multi-artifact manifests when one device needs coordinated updates.
@@ -366,7 +463,9 @@ The key rule is that option 3 should emerge by adding new adapters and policies 
 
 - Whether to remove `ca_manager_update_from_http_client()` immediately or keep it as a compatibility helper for one release.
 - Whether the first version comparator is string equality only or accepts a callback.
-- Whether manifest signing is required in the first implementation or postponed until HTTPS plus SHA-256 is validated in practice.
+- Whether manifest signing is required before public use, or postponed until HTTPS plus SHA-256 and mirror fallback are validated in practice.
+- Whether non-HTTPS artifact mirrors are ever allowed, and if so only after signed manifests are mandatory.
+- How signing keys are generated, stored, rotated, and revoked.
 - Whether `version` for CA bundles should be date-based, Mozilla certdata revision based, or generated build timestamp based.
 - Whether the ESP32 manual test interface should use ESP-IDF console or a minimal UART command loop.
 

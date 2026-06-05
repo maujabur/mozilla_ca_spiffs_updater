@@ -8,13 +8,6 @@ menu "Mozilla CA SPIFFS updater example"
         string "Wi-Fi password"
         default ""
 
-    config CA_UPDATER_BUNDLE_URL
-        string "Mozilla CA bundle binary URL"
-        default ""
-        help
-            HTTPS URL that serves an ESP-IDF x509_crt_bundle binary generated
-            from Mozilla public CA data.
-
     config CA_UPDATER_MANIFEST_URL
         string "Mozilla CA bundle manifest URL"
         default ""
@@ -22,18 +15,11 @@ menu "Mozilla CA SPIFFS updater example"
             HTTPS URL that serves a small JSON manifest with version, URL,
             SHA-256, and size for the bundle binary.
 
-    config CA_UPDATER_VERSION_URL
-        string "Mozilla CA bundle version URL"
-        default ""
+    config CA_UPDATER_ENABLE_CONSOLE
+        bool "Enable CA updater diagnostic console"
+        default y
         help
-            HTTPS URL that serves a small text file containing the current
-            bundle version, for example "1.0.1".
-
-    config CA_UPDATER_SHA256_URL
-        string "Mozilla CA bundle SHA-256 URL"
-        default ""
-        help
-            HTTPS URL that serves a small text file containing the lowercase
-            SHA-256 hex digest of the bundle binary.
+            Start an ESP-IDF console after the boot-time update check. The
+            console exposes commands to inspect CA state and test HTTPS URLs.
 
 endmenu

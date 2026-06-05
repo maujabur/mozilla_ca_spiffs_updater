@@ -3,13 +3,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ $# -ne 1 ]]; then
-  echo "Uso: $0 <versao>"
-  echo "Exemplo: $0 1.0.1"
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Uso: $0 <versao> [--prepare]"
+  echo "Exemplo: $0 1.0.1 --prepare"
   exit 1
 fi
 
 VERSION="$1"
+PREPARE=0
+
+if [[ $# -eq 2 ]]; then
+  if [[ "$2" != "--prepare" ]]; then
+    echo "Erro: opcao desconhecida: $2"
+    echo "Uso: $0 <versao> [--prepare]"
+    exit 1
+  fi
+  PREPARE=1
+fi
 
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Erro: versao deve estar no formato 1.0.1, sem o prefixo v."
@@ -36,6 +46,11 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ "${PREPARE}" -eq 1 ]]; then
+  echo "Gerando bundle antes da release"
+  python3 "${SCRIPT_DIR}/prepare.py" --output "${BIN_FILE}"
+fi
+
 if [[ ! -f "${BIN_FILE}" ]]; then
   echo "Erro: arquivo .bin nao encontrado: ${BIN_FILE}"
   exit 1
@@ -43,6 +58,7 @@ fi
 
 REPO_URL="$(gh repo view --json url -q .url)"
 BIN_URL="${REPO_URL}/releases/download/${TAG}/bundle_ca.bin"
+BUILD_ID="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 if command -v sha256sum >/dev/null 2>&1; then
   SHA256="$(sha256sum "${BIN_FILE}" | awk '{print $1}')"
@@ -65,10 +81,13 @@ cat > "${MANIFEST_FILE}" <<EOF
 {
   "schema": 1,
   "artifact_type": "ca_bundle",
+  "channel": "stable",
   "version": "${VERSION}",
+  "build_id": "${BUILD_ID}",
   "url": "${BIN_URL}",
   "sha256": "${SHA256}",
-  "size": ${BIN_SIZE}
+  "size": ${BIN_SIZE},
+  "notes": "${NOTES}"
 }
 EOF
 

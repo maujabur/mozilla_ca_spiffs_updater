@@ -785,12 +785,17 @@ esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success)
 
 esp_err_t ca_manager_update_from_http_client_verified(const char *url,
                                                       const char *expected_sha256_hex,
+                                                      size_t expected_size,
                                                       bool restart_on_success,
                                                       bool *out_promoted)
 {
     if (url == NULL || url[0] == '\0') {
         ESP_LOGW(TAG, "Bundle URL is empty; nothing to update");
         return ESP_ERR_INVALID_STATE;
+    }
+    if (expected_size > CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE) {
+        ESP_LOGE(TAG, "Invalid expected bundle size: %u", (unsigned)expected_size);
+        return ESP_ERR_INVALID_SIZE;
     }
 
     if (out_promoted != NULL) {
@@ -872,8 +877,19 @@ esp_err_t ca_manager_update_from_http_client_verified(const char *url,
         err = ESP_ERR_INVALID_SIZE;
         goto cleanup;
     }
+    if (expected_size > 0 && content_length > 0 && (size_t)content_length != expected_size) {
+        ESP_LOGE(TAG, "Content length mismatch: expected=%u actual=%lld",
+                 (unsigned)expected_size, content_length);
+        err = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
 
-    err = ca_manager_update_begin(&ctx, content_length > 0 ? (size_t)content_length : 0);
+    size_t update_expected_size = expected_size;
+    if (update_expected_size == 0 && content_length > 0) {
+        update_expected_size = (size_t)content_length;
+    }
+
+    err = ca_manager_update_begin(&ctx, update_expected_size);
     if (err != ESP_OK) {
         goto cleanup;
     }
@@ -916,6 +932,13 @@ esp_err_t ca_manager_update_from_http_client_verified(const char *url,
         }
     }
 
+    if (expected_size > 0 && ctx->written_size != expected_size) {
+        ESP_LOGE(TAG, "Downloaded size mismatch: expected=%u actual=%u",
+                 (unsigned)expected_size, (unsigned)ctx->written_size);
+        err = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
     if (verify_sha256) {
         uint8_t actual_sha256[CA_MANAGER_SHA256_SIZE];
         if (mbedtls_sha256_finish(&sha_ctx, actual_sha256) != 0) {
@@ -949,7 +972,7 @@ cleanup:
 
 esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_success)
 {
-    return ca_manager_update_from_http_client_verified(url, NULL, restart_on_success, NULL);
+    return ca_manager_update_from_http_client_verified(url, NULL, 0, restart_on_success, NULL);
 }
 
 esp_err_t ca_manager_download_text(const char *url, char *out_text, size_t out_size)

@@ -33,7 +33,7 @@ python tools/certificate_prepare/prepare.py \
   --output dist/bundle_ca.bin
 ```
 
-O arquivo `mozilla_ca.pem` fica no `--work-dir`. O binario final deve ser servido na URL configurada em `CONFIG_CA_UPDATER_BUNDLE_URL`.
+O arquivo `mozilla_ca.pem` fica no `--work-dir`. O binario final deve ser publicado e referenciado pelo `url` do `bundle_ca.manifest.json`.
 
 ## Validacao
 

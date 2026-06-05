@@ -1,10 +1,14 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "ca_manager.h"
 #include "cJSON.h"
+#include "esp_console.h"
 #include "esp_check.h"
+#include "esp_crt_bundle.h"
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
@@ -21,6 +25,9 @@
 #define CA_SHA256_BUFFER_SIZE 80
 #define CA_URL_BUFFER_SIZE 256
 #define CA_MANIFEST_BUFFER_SIZE 1024
+#define CA_CONSOLE_STACK_SIZE 8192
+#define CA_HTTP_TX_BUFFER_SIZE 4096
+#define CA_MAX_HTTP_REDIRECTS 5
 
 typedef struct {
     char version[CA_VERSION_BUFFER_SIZE];
@@ -32,6 +39,11 @@ typedef struct {
 static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_wifi_retry_count;
+
+static bool is_http_redirect_status(int status)
+{
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -99,15 +111,6 @@ static esp_err_t connect_wifi(void)
     return ESP_FAIL;
 }
 
-static void trim_text(char *text)
-{
-    if (text == NULL) {
-        return;
-    }
-
-    text[strcspn(text, "\r\n\t ")] = '\0';
-}
-
 static void log_active_bundle_state(const char *prefix)
 {
     char active_version[CA_VERSION_BUFFER_SIZE];
@@ -120,6 +123,19 @@ static void log_active_bundle_state(const char *prefix)
              prefix,
              active_version,
              (unsigned)ca_manager_get_active_bundle_size());
+}
+
+static void print_active_bundle_state(void)
+{
+    char active_version[CA_VERSION_BUFFER_SIZE];
+    esp_err_t err = ca_manager_get_active_version(active_version, sizeof(active_version));
+    if (err != ESP_OK) {
+        strlcpy(active_version, "(unknown)", sizeof(active_version));
+    }
+
+    printf("CA bundle version=%s size=%u\n",
+           active_version,
+           (unsigned)ca_manager_get_active_bundle_size());
 }
 
 static esp_err_t copy_json_string(cJSON *root, const char *name, char *out, size_t out_size)
@@ -178,6 +194,12 @@ static esp_err_t parse_manifest(const char *manifest_text, ca_bundle_manifest_t 
     ESP_GOTO_ON_ERROR(copy_json_string(root, "sha256", manifest->sha256, sizeof(manifest->sha256)),
                       cleanup, TAG, "Invalid manifest SHA-256");
 
+    if (strncmp(manifest->url, "https://", strlen("https://")) != 0) {
+        ESP_LOGE(TAG, "Manifest URL must use https");
+        ret = ESP_ERR_INVALID_RESPONSE;
+        goto cleanup;
+    }
+
     if (strlen(manifest->sha256) != CA_SHA256_HEX_SIZE) {
         ESP_LOGE(TAG, "Manifest SHA-256 is invalid: %s", manifest->sha256);
         ret = ESP_ERR_INVALID_RESPONSE;
@@ -197,50 +219,10 @@ cleanup:
     return ret;
 }
 
-static esp_err_t load_manifest(ca_bundle_manifest_t *manifest)
-{
-    if (strlen(CONFIG_CA_UPDATER_VERSION_URL) == 0) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    memset(manifest, 0, sizeof(*manifest));
-    ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_VERSION_URL,
-                                                 manifest->version,
-                                                 sizeof(manifest->version)),
-                        TAG, "Failed to download CA bundle version");
-    trim_text(manifest->version);
-    if (manifest->version[0] == '\0') {
-        ESP_LOGE(TAG, "Downloaded CA bundle version is empty");
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    if (strlen(CONFIG_CA_UPDATER_SHA256_URL) == 0) {
-        ESP_LOGE(TAG, "SHA-256 URL is empty");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_SHA256_URL,
-                                                 manifest->sha256,
-                                                 sizeof(manifest->sha256)),
-                        TAG, "Failed to download CA bundle SHA-256");
-    trim_text(manifest->sha256);
-    if (strlen(manifest->sha256) != CA_SHA256_HEX_SIZE) {
-        ESP_LOGE(TAG, "Downloaded CA bundle SHA-256 is invalid: %s", manifest->sha256);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    if (strlcpy(manifest->url, CONFIG_CA_UPDATER_BUNDLE_URL, sizeof(manifest->url)) >= sizeof(manifest->url)) {
-        ESP_LOGE(TAG, "Configured bundle URL is too long");
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t load_manifest_from_json(ca_bundle_manifest_t *manifest)
+static esp_err_t load_manifest_from_url(const char *url, ca_bundle_manifest_t *manifest)
 {
     char manifest_text[CA_MANIFEST_BUFFER_SIZE];
-    ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_MANIFEST_URL,
+    ESP_RETURN_ON_ERROR(ca_manager_download_text(url,
                                                  manifest_text,
                                                  sizeof(manifest_text)),
                         TAG, "Failed to download CA bundle manifest");
@@ -278,6 +260,7 @@ static esp_err_t apply_manifest_if_needed(const ca_bundle_manifest_t *manifest)
     bool promoted = false;
     ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client_verified(manifest->url,
                                                                     manifest->sha256,
+                                                                    manifest->size,
                                                                     false,
                                                                     &promoted),
                         TAG, "Bundle download/apply failed");
@@ -297,20 +280,233 @@ static esp_err_t apply_manifest_if_needed(const ca_bundle_manifest_t *manifest)
 
 static esp_err_t update_bundle_if_needed(void)
 {
+    if (strlen(CONFIG_CA_UPDATER_MANIFEST_URL) == 0) {
+        ESP_LOGW(TAG, "Manifest URL is empty; skipping bundle update");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     ca_bundle_manifest_t manifest;
+    ESP_RETURN_ON_ERROR(load_manifest_from_url(CONFIG_CA_UPDATER_MANIFEST_URL, &manifest),
+                        TAG, "Manifest update metadata failed");
+    return apply_manifest_if_needed(&manifest);
+}
 
-    if (strlen(CONFIG_CA_UPDATER_MANIFEST_URL) != 0) {
-        ESP_RETURN_ON_ERROR(load_manifest_from_json(&manifest), TAG, "Manifest update metadata failed");
-        return apply_manifest_if_needed(&manifest);
+static esp_err_t probe_https_url(const char *url, int *out_status, int64_t *out_content_length)
+{
+    if (url == NULL || url[0] == '\0' || out_status == NULL || out_content_length == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strncmp(url, "https://", strlen("https://")) != 0) {
+        ESP_LOGE(TAG, "URL must use https");
+        return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGW(TAG, "Manifest URL is empty; using legacy version/SHA-256 URLs");
-    if (load_manifest(&manifest) == ESP_OK) {
-        return apply_manifest_if_needed(&manifest);
+    *out_status = 0;
+    *out_content_length = 0;
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = CONFIG_CA_UPDATER_HTTP_TIMEOUT_MS,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true,
+        .max_redirection_count = CA_MAX_HTTP_REDIRECTS,
+        .buffer_size_tx = CA_HTTP_TX_BUFFER_SIZE,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        return ESP_FAIL;
     }
 
-    ESP_LOGW(TAG, "Legacy version URL is empty; using direct bundle update");
-    return ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, true);
+    esp_err_t err = ESP_OK;
+    int status = 0;
+    int64_t content_length = 0;
+    for (int redirect_count = 0; redirect_count <= CA_MAX_HTTP_REDIRECTS; redirect_count++) {
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+
+        content_length = esp_http_client_fetch_headers(client);
+        if (content_length < 0) {
+            ESP_LOGE(TAG, "HTTP fetch headers failed: %lld", content_length);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        status = esp_http_client_get_status_code(client);
+        if (!is_http_redirect_status(status)) {
+            break;
+        }
+
+        ESP_LOGI(TAG, "Following HTTP redirect: status=%d", status);
+        err = esp_http_client_set_redirection(client);
+        esp_http_client_close(client);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP redirect failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+    }
+
+    *out_status = status;
+    *out_content_length = content_length;
+    err = status >= 200 && status < 300 ? ESP_OK : ESP_FAIL;
+
+cleanup:
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return err;
+}
+
+static void print_manifest(const ca_bundle_manifest_t *manifest)
+{
+    printf("version=%s\n", manifest->version);
+    printf("url=%s\n", manifest->url);
+    printf("sha256=%s\n", manifest->sha256);
+    printf("size=%u\n", (unsigned)manifest->size);
+}
+
+static int ca_console_command(int argc, char **argv)
+{
+    if (argc < 2 || strcmp(argv[1], "help") == 0) {
+        printf("Usage:\n");
+        printf("  ca status\n");
+        printf("  ca https-test <url>\n");
+        printf("  ca fetch-manifest <url>\n");
+        printf("  ca check [manifest_url]\n");
+        printf("  ca update [manifest_url]\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "status") == 0) {
+        print_active_bundle_state();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "https-test") == 0) {
+        if (argc < 3) {
+            printf("Usage: ca https-test <url>\n");
+            return 1;
+        }
+
+        int status = 0;
+        int64_t content_length = 0;
+        esp_err_t err = probe_https_url(argv[2], &status, &content_length);
+        printf("https-test url=%s status=%d content_length=%lld result=%s\n",
+               argv[2], status, content_length, esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
+    }
+
+    if (strcmp(argv[1], "fetch-manifest") == 0) {
+        if (argc < 3) {
+            printf("Usage: ca fetch-manifest <url>\n");
+            return 1;
+        }
+
+        ca_bundle_manifest_t manifest;
+        esp_err_t err = load_manifest_from_url(argv[2], &manifest);
+        if (err != ESP_OK) {
+            printf("fetch-manifest failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+
+        print_manifest(&manifest);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "check") == 0) {
+        const char *url = argc >= 3 ? argv[2] : CONFIG_CA_UPDATER_MANIFEST_URL;
+        if (url[0] == '\0') {
+            printf("Manifest URL is empty\n");
+            return 1;
+        }
+
+        ca_bundle_manifest_t manifest;
+        esp_err_t err = load_manifest_from_url(url, &manifest);
+        if (err != ESP_OK) {
+            printf("check failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+
+        print_manifest(&manifest);
+
+        char active_version[CA_VERSION_BUFFER_SIZE];
+        err = ca_manager_get_active_version(active_version, sizeof(active_version));
+        if (err != ESP_OK) {
+            active_version[0] = '\0';
+        }
+
+        bool active_bundle_matches = false;
+        err = ca_manager_active_bundle_matches_sha256(manifest.sha256, &active_bundle_matches);
+        if (err != ESP_OK) {
+            printf("active SHA-256 check failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+
+        if (active_version[0] != '\0' && strcmp(active_version, manifest.version) == 0) {
+            printf("state=already-active\n");
+        } else if (active_bundle_matches) {
+            printf("state=version-needs-correction active_version=%s remote_version=%s\n",
+                   active_version[0] != '\0' ? active_version : "(none)",
+                   manifest.version);
+        } else {
+            printf("state=update-available active_version=%s remote_version=%s\n",
+                   active_version[0] != '\0' ? active_version : "(none)",
+                   manifest.version);
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[1], "update") == 0) {
+        const char *url = argc >= 3 ? argv[2] : CONFIG_CA_UPDATER_MANIFEST_URL;
+        if (url[0] == '\0') {
+            printf("Manifest URL is empty\n");
+            return 1;
+        }
+
+        ca_bundle_manifest_t manifest;
+        esp_err_t err = load_manifest_from_url(url, &manifest);
+        if (err != ESP_OK) {
+            printf("update metadata failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+
+        err = apply_manifest_if_needed(&manifest);
+        if (err != ESP_OK) {
+            printf("update failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        printf("update finished\n");
+        return 0;
+    }
+
+    printf("Unknown ca command: %s\n", argv[1]);
+    printf("Run 'ca help'\n");
+    return 1;
+}
+
+static esp_err_t start_diagnostic_console(void)
+{
+    esp_console_repl_t *repl = NULL;
+    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_config.prompt = "ca> ";
+    repl_config.task_stack_size = CA_CONSOLE_STACK_SIZE;
+    repl_config.max_cmdline_length = 384;
+
+    ESP_RETURN_ON_ERROR(esp_console_register_help_command(), TAG, "Failed to register help command");
+
+    const esp_console_cmd_t ca_cmd = {
+        .command = "ca",
+        .help = "CA bundle diagnostic commands. Run 'ca help'.",
+        .hint = NULL,
+        .func = &ca_console_command,
+    };
+    ESP_RETURN_ON_ERROR(esp_console_cmd_register(&ca_cmd), TAG, "Failed to register CA command");
+    ESP_RETURN_ON_ERROR(esp_console_new_repl_stdio(&repl_config, &repl), TAG, "Failed to create console REPL");
+    ESP_RETURN_ON_ERROR(esp_console_start_repl(repl), TAG, "Failed to start console REPL");
+    ESP_LOGI(TAG, "Diagnostic console ready. Run 'ca help'.");
+    return ESP_OK;
 }
 
 void app_main(void)
@@ -333,4 +529,11 @@ void app_main(void)
     }
 
     log_active_bundle_state("Ready.");
+
+#if CONFIG_CA_UPDATER_ENABLE_CONSOLE
+    err = start_diagnostic_console();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Diagnostic console failed: %s", esp_err_to_name(err));
+    }
+#endif
 }

@@ -21,6 +21,7 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 11. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se as validacoes passarem.
 12. Salva a nova versao em `/spiffs/bundle_ca.version`.
 13. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
+14. Se habilitado, inicia um console de diagnostico para testes manuais.
 
 ## Configuracao
 
@@ -29,6 +30,7 @@ Abra `idf.py menuconfig` e ajuste:
 - `Mozilla CA SPIFFS updater example > Wi-Fi SSID`
 - `Mozilla CA SPIFFS updater example > Wi-Fi password`
 - `Mozilla CA SPIFFS updater example > Mozilla CA bundle manifest URL`
+- `Mozilla CA SPIFFS updater example > Enable CA updater diagnostic console`
 
 As opcoes de storage do componente ficam em `CA manager`.
 
@@ -47,6 +49,30 @@ O script de release gera e publica `bundle_ca.manifest.json`, `bundle_ca.bin`, `
 ```bash
 tools/certificate_prepare/create_release.sh 1.0.1
 ```
+
+Para regenerar o bundle imediatamente antes de publicar:
+
+```bash
+tools/certificate_prepare/create_release.sh 1.0.1 --prepare
+```
+
+## Console de diagnostico
+
+Quando `Enable CA updater diagnostic console` esta habilitado, o app inicia um
+prompt `ca>` depois do check de boot. Use `help` para listar comandos e `ca
+help` para os comandos especificos do updater.
+
+```text
+ca status
+ca https-test <url>
+ca fetch-manifest <url>
+ca check [manifest_url]
+ca update [manifest_url]
+```
+
+`ca https-test` abre uma conexao HTTPS, segue redirects e imprime status HTTP e
+tamanho anunciado. Ele e util para testar GitHub Releases, mirrors e servidores
+com cadeias de certificados diferentes sem trocar o firmware.
 
 ## Exemplo com chunks do `esp_http_client`
 
