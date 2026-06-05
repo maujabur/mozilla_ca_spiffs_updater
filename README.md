@@ -25,6 +25,8 @@ Abra `idf.py menuconfig` e ajuste:
 
 A URL deve servir um arquivo binario no formato `x509_crt_bundle` do ESP-IDF, gerado pelo script `components/mbedtls/esp_crt_bundle/gen_crt_bundle.py` a partir das CAs publicas da Mozilla. Nao use um arquivo PEM concatenado diretamente; `esp_crt_bundle_set()` espera o formato binario ordenado do ESP-IDF. No ESP-IDF v6.2, mantenha o bundle ordenado por subject name para a busca binaria em tempo de execucao.
 
+O diretorio `tools/certificate_prepare` contem um preparador Python para gerar esse `bundle_ca.bin` a partir do `certdata.txt` da Mozilla, com suporte a download automatico e override por arquivo local.
+
 
 ## Exemplo com chunks do `esp_http_client`
 
