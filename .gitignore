@@ -1,2 +1,49 @@
-/.vscode
-/build
+# ESP-IDF / CMake build output
+/build/
+/managed_components/
+/dependencies.lock
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.ci
+
+# Generated firmware and certificate artifacts
+*.bin
+*.elf
+*.map
+*.uf2
+*.hex
+*.img
+*.pem
+*.crt
+*.cer
+*.der
+*.key
+*.csr
+*.p12
+*.pfx
+
+# Python local files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+*.token
+
+# Editor and OS files
+/.vscode/
+/.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
