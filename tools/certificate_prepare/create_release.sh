@@ -18,7 +18,8 @@ fi
 
 TAG="v${VERSION}"
 BIN_FILE="${SCRIPT_DIR}/bundle_ca.bin"
-TITLE="Firmware ${TAG}"
+VERSION_FILE="${SCRIPT_DIR}/bundle_ca.version"
+TITLE="Mozilla CA bundle ${TAG}"
 NOTES="Release ${TAG}"
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -38,9 +39,12 @@ if [[ ! -f "${BIN_FILE}" ]]; then
   exit 1
 fi
 
+printf "%s\n" "${VERSION}" > "${VERSION_FILE}"
+
 echo "Criando release ${TAG}"
 echo "Arquivo: ${BIN_FILE}"
+echo "Versao: ${VERSION_FILE}"
 echo "Titulo: ${TITLE}"
 echo "Notas: ${NOTES}"
 
-gh release create "${TAG}" "${BIN_FILE}" --title "${TITLE}" --notes "${NOTES}"
+gh release create "${TAG}" "${BIN_FILE}" "${VERSION_FILE}" --title "${TITLE}" --notes "${NOTES}"

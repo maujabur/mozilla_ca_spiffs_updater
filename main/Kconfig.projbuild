@@ -15,4 +15,11 @@ menu "Mozilla CA SPIFFS updater example"
             HTTPS URL that serves an ESP-IDF x509_crt_bundle binary generated
             from Mozilla public CA data.
 
+    config CA_UPDATER_VERSION_URL
+        string "Mozilla CA bundle version URL"
+        default ""
+        help
+            HTTPS URL that serves a small text file containing the current
+            bundle version, for example "1.0.1".
+
 endmenu

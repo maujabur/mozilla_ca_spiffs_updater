@@ -12,10 +12,12 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 2. Tenta carregar `/spiffs/bundle_ca.bin` e ativar com `esp_crt_bundle_set()`.
 3. Se nao houver bundle valido em SPIFFS, usa o bundle embutido do ESP-IDF como fallback.
 4. Conecta ao Wi-Fi configurado.
-5. Baixa um novo `bundle_ca.bin` de uma URL HTTPS configurada para `/spiffs/bundle_ca.bin.tmp`.
-6. Valida o binario baixado chamando `esp_crt_bundle_set()`.
-7. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se a validacao passar.
-8. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
+5. Baixa `bundle_ca.version` de uma URL HTTPS configurada e compara com a versao salva em SPIFFS.
+6. Se a versao mudou, baixa um novo `bundle_ca.bin` para `/spiffs/bundle_ca.bin.tmp`.
+7. Valida o binario baixado chamando `esp_crt_bundle_set()`.
+8. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se a validacao passar.
+9. Salva a nova versao em `/spiffs/bundle_ca.version`.
+10. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
 
 ## Configuracao
 
@@ -24,6 +26,7 @@ Abra `idf.py menuconfig` e ajuste:
 - `Mozilla CA SPIFFS updater example > Wi-Fi SSID`
 - `Mozilla CA SPIFFS updater example > Wi-Fi password`
 - `Mozilla CA SPIFFS updater example > Mozilla CA bundle binary URL`
+- `Mozilla CA SPIFFS updater example > Mozilla CA bundle version URL`
 
 As opcoes de storage do componente ficam em `CA manager`.
 
@@ -31,6 +34,18 @@ A URL deve servir um arquivo binario no formato `x509_crt_bundle` do ESP-IDF, ge
 
 O diretorio `tools/certificate_prepare` contem um preparador Python para gerar esse `bundle_ca.bin` a partir do `certdata.txt` da Mozilla, com suporte a download automatico e override por arquivo local.
 
+Para GitHub Releases, configure URLs estaveis usando `latest/download`:
+
+```text
+https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.version
+https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.bin
+```
+
+O script de release gera e publica os dois assets:
+
+```bash
+tools/certificate_prepare/create_release.sh 1.0.1
+```
 
 ## Exemplo com chunks do `esp_http_client`
 

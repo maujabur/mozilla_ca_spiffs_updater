@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 
 #define CA_MANAGER_DOWNLOAD_BUFFER_SIZE 4096
+#define CA_MANAGER_HTTP_TX_BUFFER_SIZE 4096
 #define CA_MANAGER_MAX_HTTP_REDIRECTS 5
 
 struct ca_manager_update_ctx {
@@ -53,6 +54,11 @@ static void build_default_paths(char *active_path, size_t active_size,
     build_path(active_path, active_size, CONFIG_CA_UPDATER_BUNDLE_FILENAME);
     snprintf(temp_path, temp_size, "%s.tmp", active_path);
     snprintf(backup_path, backup_size, "%s.bak", active_path);
+}
+
+static void build_version_path(char *version_path, size_t version_size)
+{
+    build_path(version_path, version_size, CONFIG_CA_UPDATER_VERSION_FILENAME);
 }
 
 static bool file_exists(const char *path)
@@ -316,6 +322,15 @@ static esp_err_t validate_and_promote(ca_manager_update_ctx_t *ctx, bool restart
         return err;
     }
 
+    if (s_active_bundle != NULL &&
+        s_active_bundle_size == new_bundle_size &&
+        memcmp(s_active_bundle, new_bundle, new_bundle_size) == 0) {
+        ESP_LOGI(TAG, "Downloaded CA bundle is already active; skipping promotion");
+        free(new_bundle);
+        unlink(ctx->temp_path);
+        return ESP_OK;
+    }
+
     uint8_t *old_bundle = s_active_bundle;
     size_t old_bundle_size = s_active_bundle_size;
     s_active_bundle = NULL;
@@ -379,6 +394,68 @@ esp_err_t ca_manager_init(void)
 size_t ca_manager_get_active_bundle_size(void)
 {
     return s_active_bundle_size;
+}
+
+esp_err_t ca_manager_get_active_version(char *out_version, size_t out_size)
+{
+    if (out_version == NULL || out_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    out_version[0] = '\0';
+
+    char version_path[128];
+    build_version_path(version_path, sizeof(version_path));
+
+    FILE *file = fopen(version_path, "r");
+    if (file == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (fgets(out_version, out_size, file) == NULL) {
+        fclose(file);
+        return ESP_FAIL;
+    }
+
+    fclose(file);
+    out_version[strcspn(out_version, "\r\n")] = '\0';
+    return ESP_OK;
+}
+
+esp_err_t ca_manager_set_active_version(const char *version)
+{
+    if (version == NULL || version[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char version_path[128];
+    build_version_path(version_path, sizeof(version_path));
+
+    FILE *file = fopen(version_path, "w");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open version file %s: errno=%d", version_path, errno);
+        return ESP_FAIL;
+    }
+
+    if (fprintf(file, "%s\n", version) < 0) {
+        ESP_LOGE(TAG, "Failed to write version file %s: errno=%d", version_path, errno);
+        fclose(file);
+        return ESP_FAIL;
+    }
+
+    if (fflush(file) != 0 || fsync(fileno(file)) != 0) {
+        ESP_LOGE(TAG, "Failed to sync version file %s: errno=%d", version_path, errno);
+        fclose(file);
+        return ESP_FAIL;
+    }
+
+    if (fclose(file) != 0) {
+        ESP_LOGE(TAG, "Failed to close version file %s: errno=%d", version_path, errno);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Stored CA bundle version %s", version);
+    return ESP_OK;
 }
 
 esp_err_t ca_manager_update_begin(ca_manager_update_ctx_t **out_ctx, size_t expected_size)
@@ -555,6 +632,7 @@ esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_su
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
         .max_redirection_count = CA_MANAGER_MAX_HTTP_REDIRECTS,
+        .buffer_size_tx = CA_MANAGER_HTTP_TX_BUFFER_SIZE,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -654,6 +732,110 @@ cleanup:
     if (ctx != NULL) {
         ca_manager_update_abort(ctx);
     }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return err;
+}
+
+esp_err_t ca_manager_download_text(const char *url, char *out_text, size_t out_size)
+{
+    if (url == NULL || url[0] == '\0' || out_text == NULL || out_size < 2) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    out_text[0] = '\0';
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = CONFIG_CA_UPDATER_HTTP_TIMEOUT_MS,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true,
+        .max_redirection_count = CA_MANAGER_MAX_HTTP_REDIRECTS,
+        .buffer_size_tx = CA_MANAGER_HTTP_TX_BUFFER_SIZE,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = ESP_OK;
+    int64_t content_length = 0;
+    int status = 0;
+    for (int redirect_count = 0; redirect_count <= CA_MANAGER_MAX_HTTP_REDIRECTS; redirect_count++) {
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+
+        content_length = esp_http_client_fetch_headers(client);
+        if (content_length < 0) {
+            ESP_LOGE(TAG, "HTTP fetch headers failed: %lld", content_length);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        status = esp_http_client_get_status_code(client);
+        if (!is_http_redirect_status(status)) {
+            break;
+        }
+
+        ESP_LOGI(TAG, "Following HTTP redirect: status=%d", status);
+        err = esp_http_client_set_redirection(client);
+        esp_http_client_close(client);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP redirect failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+    }
+
+    if (status != 200) {
+        ESP_LOGE(TAG, "Unexpected HTTP status: %d", status);
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+
+    if (content_length >= (int64_t)out_size) {
+        ESP_LOGE(TAG, "Text response too large: %lld", content_length);
+        err = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    size_t written = 0;
+    while (content_length <= 0 || written < (size_t)content_length) {
+        int bytes_to_read = (int)(out_size - 1 - written);
+        if (bytes_to_read <= 0) {
+            err = ESP_ERR_INVALID_SIZE;
+            goto cleanup;
+        }
+        if (content_length > 0) {
+            size_t remaining = (size_t)content_length - written;
+            if (remaining < (size_t)bytes_to_read) {
+                bytes_to_read = (int)remaining;
+            }
+        }
+
+        int read_len = esp_http_client_read(client, out_text + written, bytes_to_read);
+        if (read_len < 0) {
+            ESP_LOGE(TAG, "HTTP read failed");
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+        if (read_len == 0) {
+            if (esp_http_client_is_complete_data_received(client)) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        written += (size_t)read_len;
+    }
+
+    out_text[written] = '\0';
+
+cleanup:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     return err;

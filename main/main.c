@@ -6,6 +6,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -14,6 +15,7 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
 #define MAX_WIFI_RETRY 8
+#define CA_VERSION_BUFFER_SIZE 32
 
 static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
@@ -85,6 +87,58 @@ static esp_err_t connect_wifi(void)
     return ESP_FAIL;
 }
 
+static void trim_version(char *version)
+{
+    if (version == NULL) {
+        return;
+    }
+
+    version[strcspn(version, "\r\n\t ")] = '\0';
+}
+
+static esp_err_t update_bundle_if_needed(void)
+{
+    if (strlen(CONFIG_CA_UPDATER_VERSION_URL) == 0) {
+        ESP_LOGW(TAG, "Version URL is empty; using direct bundle update");
+        return ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, true);
+    }
+
+    char remote_version[CA_VERSION_BUFFER_SIZE];
+    ESP_RETURN_ON_ERROR(ca_manager_download_text(CONFIG_CA_UPDATER_VERSION_URL,
+                                                 remote_version,
+                                                 sizeof(remote_version)),
+                        TAG, "Failed to download CA bundle version");
+    trim_version(remote_version);
+    if (remote_version[0] == '\0') {
+        ESP_LOGE(TAG, "Downloaded CA bundle version is empty");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    char active_version[CA_VERSION_BUFFER_SIZE];
+    esp_err_t err = ca_manager_get_active_version(active_version, sizeof(active_version));
+    if (err == ESP_OK && strcmp(active_version, remote_version) == 0) {
+        ESP_LOGI(TAG, "CA bundle version %s is already active", active_version);
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        active_version[0] = '\0';
+    }
+
+    ESP_LOGI(TAG, "Updating CA bundle version %s -> %s",
+             active_version[0] != '\0' ? active_version : "(none)",
+             remote_version);
+
+    ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, false),
+                        TAG, "Bundle download/apply failed");
+    ESP_RETURN_ON_ERROR(ca_manager_set_active_version(remote_version),
+                        TAG, "Failed to store CA bundle version");
+
+    ESP_LOGI(TAG, "CA bundle updated to version %s; restarting", remote_version);
+    fflush(stdout);
+    esp_restart();
+    return ESP_OK;
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -97,7 +151,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ca_manager_init());
 
     if (connect_wifi() == ESP_OK) {
-        err = ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, true);
+        err = update_bundle_if_needed();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Bundle update failed: %s", esp_err_to_name(err));
         }

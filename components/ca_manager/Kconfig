@@ -12,6 +12,10 @@ menu "CA manager"
         string "Active bundle file"
         default "bundle_ca.bin"
 
+    config CA_UPDATER_VERSION_FILENAME
+        string "Active bundle version file"
+        default "bundle_ca.version"
+
     config CA_UPDATER_MAX_BUNDLE_SIZE
         int "Maximum bundle size"
         default 262144

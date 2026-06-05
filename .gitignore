@@ -13,6 +13,7 @@
 *.uf2
 *.hex
 *.img
+tools/certificate_prepare/bundle_ca.version
 *.pem
 *.crt
 *.cer
