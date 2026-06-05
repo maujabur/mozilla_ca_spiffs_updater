@@ -267,17 +267,17 @@ Suggested periodic policy for the example app:
 
 The updater should eventually persist last-check and last-result metadata, but this can be postponed until the manifest flow is working manually.
 
-## Decision Timing
+## Accepted Architecture Decisions
 
-Not every open decision must be closed before implementation starts. The decisions that affect component boundaries and file movement should be decided now; policy details can stay configurable or be deferred.
-
-Decide now:
+These decisions are accepted for the first implementation increment:
 
 - Use `components/` for reusable code and keep `main/` as the example app.
 - Use an apply-style callback as the primary manifest updater contract.
 - Keep `ca_manager` free of manifest, version, channel, and scheduling policy.
 - Add terminal-driven integration testing as an example-app feature.
 - Keep periodic scheduling outside `manifest_file_updater`.
+
+Not every remaining open decision must be closed before implementation starts. Policy details can stay configurable or be deferred.
 
 Can be decided during implementation:
 
