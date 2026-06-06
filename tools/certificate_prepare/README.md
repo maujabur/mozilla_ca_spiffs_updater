@@ -37,8 +37,18 @@ O arquivo `mozilla_ca.pem` fica no `--work-dir`. O binario final deve ser public
 
 ## Pacote de artefatos
 
-Para publicar o bundle em um repositorio separado de artefatos, gere o pacote em
-um diretorio que possa ser commitado nesse repo:
+Para gerar, commitar e publicar o bundle em um repositorio separado de
+artefatos, use:
+
+```bash
+tools/certificate_prepare/publish_artifacts.sh 1.0.9
+```
+
+Esse comando garante que `../mozilla_ca_spiffs_artifacts` seja um clone Git,
+gera o bundle, atualiza `ca/stable`, cria o commit e executa `git push`.
+
+Se quiser fazer o processo manualmente, clone o repo de artefatos e gere o
+pacote em um diretorio que possa ser commitado nesse repo:
 
 ```bash
 git clone https://github.com/maujabur/mozilla_ca_spiffs_artifacts.git \

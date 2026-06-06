@@ -61,19 +61,16 @@ Com GitHub Pages habilitado nesse repo, a URL configurada no firmware fica:
 https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable/bundle_ca.manifest.json
 ```
 
-Para gerar os arquivos dentro de um clone local do repo de artefatos:
+Para gerar, commitar e publicar os arquivos no repo de artefatos:
 
 ```bash
-python tools/certificate_prepare/package_artifacts.py 1.0.9 \
-  --prepare \
-  --out-dir ../mozilla_ca_spiffs_artifacts/ca/stable \
-  --base-url https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable
+tools/certificate_prepare/publish_artifacts.sh 1.0.9
 ```
 
-Depois publique esse outro repositorio com `git add`, `git commit` e `git push`.
-O manifest atual usa `url` unico; a ferramenta tambem aceita
-`--extra-artifact-url` para registrar URLs extras no campo `urls`, preparando o
-caminho para fallback por mirrors quando o firmware passar a consumir essa lista.
+O script garante que `../mozilla_ca_spiffs_artifacts` seja um clone Git, gera o
+bundle, atualiza `ca/stable`, cria o commit e faz `git push`. Internamente ele
+tambem registra uma URL extra no campo `urls`, preparando o caminho para fallback
+por mirrors quando o firmware passar a consumir essa lista.
 
 ## Diagnostico HTTPS
 
