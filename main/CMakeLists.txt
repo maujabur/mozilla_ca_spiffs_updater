@@ -3,8 +3,8 @@ idf_component_register(
         "main.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
+        ca_manifest_updater
         ca_manager
-        cjson
         console
         esp_event
         esp_http_client

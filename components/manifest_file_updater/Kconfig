@@ -1,0 +1,15 @@
+menu "Manifest file updater"
+
+    config MANIFEST_FILE_UPDATER_HTTP_TIMEOUT_MS
+        int "HTTP timeout in milliseconds"
+        default 15000
+
+    config MANIFEST_FILE_UPDATER_MAX_REDIRECTS
+        int "Maximum HTTP redirects"
+        default 5
+
+    config MANIFEST_FILE_UPDATER_DOWNLOAD_BUFFER_SIZE
+        int "HTTP download buffer size"
+        default 4096
+
+endmenu

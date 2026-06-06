@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "ca_manifest_updater.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        ca_manager
+        manifest_file_updater
+)

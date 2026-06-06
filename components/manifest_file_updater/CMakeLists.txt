@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "manifest_file_updater.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cjson
+        esp_http_client
+        mbedtls
+)

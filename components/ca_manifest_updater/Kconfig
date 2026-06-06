@@ -1,0 +1,7 @@
+menu "CA manifest updater"
+
+    config CA_MANIFEST_UPDATER_MAX_MANIFEST_SIZE
+        int "Maximum CA bundle manifest size"
+        default 1024
+
+endmenu

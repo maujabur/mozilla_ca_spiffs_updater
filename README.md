@@ -2,7 +2,11 @@
 
 Projeto ESP-IDF independente para gerenciar, em tempo de execucao, um bundle publico de CAs da Mozilla armazenado em uma particao SPIFFS.
 
-O codigo reutilizavel fica em `components/ca_manager`. O diretorio `main/` contem um app de exemplo para ESP32/ESP32-S3 que configura Wi-Fi e demonstra o fluxo de atualizacao.
+O codigo reutilizavel fica em componentes ESP-IDF: `components/ca_manager`
+gerencia o ciclo de vida do bundle, `components/manifest_file_updater` baixa e
+verifica artefatos descritos por manifestos, e `components/ca_manifest_updater`
+adapta esse fluxo para bundles de CA. O diretorio `main/` contem um app de
+exemplo para ESP32/ESP32-S3 que configura Wi-Fi, diagnosticos e console.
 
 Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`dependencies.lock`). O devcontainer deste projeto fica pinado em `espressif/idf:v6.2.0`.
 
@@ -15,10 +19,10 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 5. Baixa `bundle_ca.manifest.json` de uma URL HTTPS configurada.
 6. Compara `version` com a versao salva em SPIFFS.
 7. Se a versao mudou, compara o `sha256` do manifest com o bundle ativo em memoria.
-8. Se o bundle ativo nao bater, baixa o `url` do manifest para `/spiffs/bundle_ca.bin.tmp`.
-9. Confere o SHA-256 do binario baixado.
-10. Valida o binario chamando `esp_crt_bundle_set()`.
-11. Promove o arquivo temporario para `/spiffs/bundle_ca.bin` somente se as validacoes passarem.
+8. Se o bundle ativo nao bater, `manifest_file_updater` baixa o `url` do manifest para um arquivo temporario em SPIFFS.
+9. Confere tamanho e SHA-256 do binario baixado antes de entregar o arquivo ao adaptador de CA.
+10. `ca_manifest_updater` chama `ca_manager_apply_file()`.
+11. `ca_manager` valida o binario chamando `esp_crt_bundle_set()` e promove para `/spiffs/bundle_ca.bin` somente se as validacoes passarem.
 12. Salva a nova versao em `/spiffs/bundle_ca.version`.
 13. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
 14. Se configurado, testa URLs HTTPS de diagnostico e registra o resultado no log.
@@ -34,7 +38,8 @@ Abra `idf.py menuconfig` e ajuste:
 - `Mozilla CA SPIFFS updater example > Enable CA updater diagnostic console`
 - `Mozilla CA SPIFFS updater example > Boot HTTPS diagnostic URLs`
 
-As opcoes de storage do componente ficam em `CA manager`.
+As opcoes de storage do componente ficam em `CA manager`. Timeouts e buffers do
+download generico ficam em `Manifest file updater`.
 
 A URL deve servir um arquivo binario no formato `x509_crt_bundle` do ESP-IDF, gerado pelo script `components/mbedtls/esp_crt_bundle/gen_crt_bundle.py` a partir das CAs publicas da Mozilla. Nao use um arquivo PEM concatenado diretamente; `esp_crt_bundle_set()` espera o formato binario ordenado do ESP-IDF. No ESP-IDF v6.2, mantenha o bundle ordenado por subject name para a busca binaria em tempo de execucao.
 
@@ -191,4 +196,4 @@ idf.py -p /dev/ttyACM0 flash monitor
 - O app mantem o buffer do bundle ativo em RAM, pois o ESP-IDF recebe um ponteiro para o binario do bundle.
 - Clientes HTTPS, OTA e MQTT que usam `.crt_bundle_attach = esp_crt_bundle_attach` passam a usar o bundle ativado por `esp_crt_bundle_set()`.
 - Se o download falhar ou o bundle novo for invalido, o arquivo ativo anterior permanece preservado.
-- Para integracao com atualizadores baseados em manifesto, prefira `ca_manager_apply_file(path, restart_on_success)`: a camada externa baixa e verifica o artefato, e o `ca_manager` valida semanticamente o bundle antes de promove-lo.
+- Para integracao com atualizadores baseados em manifesto, prefira `manifest_file_updater` + `ca_manager_apply_file(path, restart_on_success)`: a camada externa baixa e verifica o artefato, e o `ca_manager` valida semanticamente o bundle antes de promove-lo.
