@@ -5,7 +5,6 @@ idf_component_register(
     PRIV_REQUIRES
         ca_manifest_updater
         ca_manager
-        console
         esp_event
         esp_http_client
         esp_netif

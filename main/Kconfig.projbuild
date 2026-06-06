@@ -15,13 +15,6 @@ menu "Mozilla CA SPIFFS updater example"
             HTTPS URL that serves a small JSON manifest with version, URL,
             SHA-256, and size for the bundle binary.
 
-    config CA_UPDATER_ENABLE_CONSOLE
-        bool "Enable CA updater diagnostic console"
-        default n
-        help
-            Start an ESP-IDF console after the boot-time update check. The
-            console exposes commands to inspect CA state and test HTTPS URLs.
-
     config CA_UPDATER_BOOT_HTTPS_TEST_URLS
         string "Boot HTTPS diagnostic URLs"
         default "https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.manifest.json"

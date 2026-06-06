@@ -6,7 +6,7 @@ O codigo reutilizavel fica em componentes ESP-IDF: `components/ca_manager`
 gerencia o ciclo de vida do bundle, `components/manifest_file_updater` baixa e
 verifica artefatos descritos por manifestos, e `components/ca_manifest_updater`
 adapta esse fluxo para bundles de CA. O diretorio `main/` contem um app de
-exemplo para ESP32/ESP32-S3 que configura Wi-Fi, diagnosticos e console.
+exemplo para ESP32/ESP32-S3 que configura Wi-Fi e diagnosticos de boot.
 
 Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`dependencies.lock`). O devcontainer deste projeto fica pinado em `espressif/idf:v6.2.0`.
 
@@ -26,7 +26,6 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 12. Salva a nova versao em `/spiffs/bundle_ca.version`.
 13. Reinicia o dispositivo com `esp_restart()` apos uma atualizacao confirmada.
 14. Se configurado, testa URLs HTTPS de diagnostico e registra o resultado no log.
-15. Se habilitado, inicia um console de diagnostico para testes manuais.
 
 ## Configuracao
 
@@ -35,7 +34,6 @@ Abra `idf.py menuconfig` e ajuste:
 - `Mozilla CA SPIFFS updater example > Wi-Fi SSID`
 - `Mozilla CA SPIFFS updater example > Wi-Fi password`
 - `Mozilla CA SPIFFS updater example > Mozilla CA bundle manifest URL`
-- `Mozilla CA SPIFFS updater example > Enable CA updater diagnostic console`
 - `Mozilla CA SPIFFS updater example > Boot HTTPS diagnostic URLs`
 
 As opcoes de storage do componente ficam em `CA manager`. Timeouts e buffers do
@@ -63,74 +61,12 @@ Para regenerar o bundle imediatamente antes de publicar:
 tools/certificate_prepare/create_release.sh 1.0.1 --prepare
 ```
 
-## Console de diagnostico
+## Diagnostico HTTPS
 
 O app pode testar URLs HTTPS automaticamente no boot, sem depender de entrada
 interativa pela serial. Configure uma lista separada por virgulas em `Boot HTTPS
 diagnostic URLs`. Depois que o Wi-Fi conecta, o log mostra status HTTP,
 `content_length` e resultado TLS/HTTP de cada URL.
-
-Quando `Enable CA updater diagnostic console` esta habilitado, o app tambem
-inicia um prompt `ca>` depois do check de boot. Use `help` para listar comandos
-e `ca help` para os comandos especificos do updater. Essa opcao fica desligada
-por padrao porque alguns monitores seriais conseguem ler logs, mas nao enviam
-comandos de forma confiavel.
-
-```text
-ca status
-ca https-test <url>
-ca fetch-manifest <url>
-ca check [manifest_url]
-ca update [manifest_url]
-```
-
-`ca https-test` abre uma conexao HTTPS, segue redirects e imprime status HTTP e
-tamanho anunciado. Ele e util para testar GitHub Releases, mirrors e servidores
-com cadeias de certificados diferentes sem trocar o firmware.
-
-### Monitor interativo no ESP32-S3 USB Serial/JTAG
-
-Para enviar comandos ao prompt `ca>` pelo USB nativo do ESP32-S3, mantenha o
-console do ESP-IDF roteado para o controlador USB Serial/JTAG. O projeto fixa
-isso em `sdkconfig.defaults` com `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`; se o
-`sdkconfig` ja existir, confirme em `idf.py menuconfig`:
-
-```text
-Component config -> ESP System Settings -> Channel for console output -> USB Serial/JTAG Controller
-```
-
-No host Linux, o usuario que abre o Dev Container deve pertencer ao grupo
-`dialout`, pois a permissao da `/dev/ttyACM0` nasce no host:
-
-```bash
-sudo usermod -aG dialout seu_usuario_host
-```
-
-Depois de alterar o grupo, encerre a sessao do usuario no host e entre de novo.
-Dentro do Dev Container o usuario normalmente e `root`, entao `sudo` nao e
-necessario para acessar a porta.
-
-Para evitar travamento de escrita causado por sinais DTR/RTS na USB Serial/JTAG,
-abra o monitor em um terminal do Dev Container com o script da raiz do projeto:
-
-```bash
-./monitor.sh
-```
-
-Por padrao ele usa `/dev/ttyACM0` e executa:
-
-```bash
-idf.py -p /dev/ttyACM0 monitor --no-reset
-```
-
-Para usar outra porta:
-
-```bash
-./monitor.sh /dev/ttyACM1
-```
-
-Se a selecao do canal de console foi alterada em um `sdkconfig` ja gerado, rode
-`idf.py fullclean` e faca um novo build antes de testar o prompt interativo.
 
 ## Exemplo com chunks do `esp_http_client`
 
