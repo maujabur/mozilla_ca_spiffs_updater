@@ -1,12 +1,19 @@
 # CA Manager Component Apply Implementation Plan
 
+> **Status 2026-06-06:** implemented and superseded by the manifest-based flow.
+> `ca_manager` now lives in `components/ca_manager`, exposes
+> `ca_manager_apply_file()`, and no longer contains HTTP helpers or an
+> `esp_http_client` dependency. Network downloads, redirects, remote metadata
+> checks, and SHA-256 verification belong to `manifest_file_updater`; the CA
+> adapter calls `ca_manager_apply_file()` with a verified local artifact.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move `ca_manager` into a reusable ESP-IDF component and add an apply-style file API that future manifest code can call after artifact verification.
 
 **Architecture:** `components/ca_manager` owns CA bundle storage, validation, activation, and promotion. `main/` remains an example application that owns Wi-Fi and example update behavior. The first increment preserves existing behavior while creating the boundary needed for `manifest_file_updater`.
 
-**Tech Stack:** ESP-IDF C component layout, SPIFFS, `esp_crt_bundle`, `esp_http_client`, CMake, Kconfig.
+**Tech Stack:** ESP-IDF C component layout, SPIFFS, `esp_crt_bundle`, CMake, Kconfig.
 
 ---
 
@@ -56,7 +63,6 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        esp_http_client
         mbedtls
         spiffs
 )
@@ -84,10 +90,6 @@ menu "CA manager"
     config CA_UPDATER_MAX_BUNDLE_SIZE
         int "Maximum bundle size"
         default 262144
-
-    config CA_UPDATER_HTTP_TIMEOUT_MS
-        int "HTTP timeout in milliseconds"
-        default 15000
 
 endmenu
 ```
@@ -125,12 +127,18 @@ menu "Mozilla CA SPIFFS updater example"
         string "Wi-Fi password"
         default ""
 
-    config CA_UPDATER_BUNDLE_URL
-        string "Mozilla CA bundle binary URL"
+    config CA_UPDATER_MANIFEST_URL
+        string "Mozilla CA bundle manifest URL"
         default ""
         help
-            HTTPS URL that serves an ESP-IDF x509_crt_bundle binary generated
-            from Mozilla public CA data.
+            HTTPS URL that serves a small JSON manifest with version, URL,
+            SHA-256, and size for the bundle binary.
+
+    config CA_UPDATER_BOOT_HTTPS_TEST_URLS
+        string "Boot HTTPS diagnostic URLs"
+        default ""
+        help
+            Comma-separated HTTPS URLs tested after Wi-Fi connects.
 
 endmenu
 ```
@@ -248,7 +256,7 @@ static esp_err_t copy_file(const char *source_path, const char *dest_path, size_
 
 - [ ] **Step 3: Implement `ca_manager_apply_file()`**
 
-Add this function before `ca_manager_update_from_http_client()`:
+Add this function near the other public update APIs:
 
 ```c
 esp_err_t ca_manager_apply_file(const char *path, bool restart_on_success)
@@ -308,15 +316,22 @@ git commit -m "feat: add ca manager apply file API"
 - Modify: `README.md`
 - Modify: `docs/superpowers/specs/2026-06-05-manifest-file-updater-design.md`
 
-- [ ] **Step 1: Keep the example app behavior unchanged**
+- [ ] **Step 1: Update the example app to use the manifest adapter**
 
-Inspect `main/main.c` and keep this call for now:
+Configure the manifest updater and call the CA-specific adapter:
 
 ```c
-err = ca_manager_update_from_http_client(CONFIG_CA_UPDATER_BUNDLE_URL, true);
+const ca_manifest_updater_config_t config = {
+    .manifest_url = CONFIG_CA_UPDATER_MANIFEST_URL,
+    .channel = NULL,
+    .restart_on_update = true,
+};
+err = ca_manifest_updater_run(&config, NULL);
 ```
 
-Expected: no code change is required in `main/main.c` for this increment. The direct HTTP helper remains only as a compatibility/example path until the manifest updater exists.
+Expected: `main/main.c` owns example policy, while downloads and artifact
+verification stay in `manifest_file_updater` and CA validation/promotion stays
+in `ca_manager`.
 
 - [ ] **Step 2: Update the root README component description**
 

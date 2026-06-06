@@ -11,13 +11,17 @@ The first implementation target remains CA bundle updates for ESP32/ESP32-S3. Th
 
 ## Current Context
 
-The current project already has useful boundaries:
+The project now has the intended component boundaries:
 
-- `main/ca_manager.c` and `main/ca_manager.h` manage SPIFFS storage, active bundle loading, streaming writes, validation through `esp_crt_bundle_set()`, safe promotion, and fallback to the embedded ESP-IDF bundle.
-- `main/main.c` is an example application that initializes NVS, connects Wi-Fi, and calls the CA update flow.
+- `components/ca_manager` manages SPIFFS storage, active bundle loading, streaming writes, file apply, validation through `esp_crt_bundle_set()`, safe promotion, and fallback to the embedded ESP-IDF bundle.
+- `components/manifest_file_updater` owns HTTPS manifest/artifact download, redirects, bounded reads, size checks, and SHA-256 verification.
+- `components/ca_manifest_updater` adapts the generic manifest updater to CA bundles and calls `ca_manager_apply_file()` with a verified local file.
+- `main/main.c` is an example application that initializes NVS, connects Wi-Fi, runs boot HTTPS diagnostics, and calls the manifest-driven CA update flow.
 - `tools/certificate_prepare/prepare.py` generates the `bundle_ca.bin` consumed by the device.
 
-The main issue is portability. Reusable code currently lives beside the example app in `main/`, and `ca_manager` includes an HTTP helper. A future manifest layer should not add more policy and network behavior to the CA core.
+The main architectural rule is that network policy stays outside the CA core.
+`ca_manager` does not perform HTTP and should remain focused on local storage,
+semantic CA bundle validation, activation, and promotion.
 
 ## Recommended Structure
 
@@ -353,15 +357,15 @@ These decisions are accepted for the first implementation increment:
 - Use `components/` for reusable code and keep `main/` as the example app.
 - Use an apply-style callback as the primary manifest updater contract.
 - Keep `ca_manager` free of manifest, version, channel, and scheduling policy.
-- Add terminal-driven integration testing as an example-app feature.
+- Keep example-app diagnostics in `main/`, currently as boot HTTPS probes.
 - Keep periodic scheduling outside `manifest_file_updater`.
+- Remove HTTP helpers from `ca_manager`; external flows download and verify
+  files before calling `ca_manager_apply_file()`.
 
 Not every remaining open decision must be closed before implementation starts. Policy details can stay configurable or be deferred.
 
 Can be decided during implementation:
 
-- Whether the test interface uses ESP-IDF console or a minimal UART command loop.
-- Whether `ca_manager_update_from_http_client()` is removed immediately or kept as a compatibility helper.
 - Whether the first version comparator is string equality only or callback-based.
 - Exact ESP-IDF error code mapping for each updater result.
 
@@ -381,7 +385,7 @@ Can be postponed:
 - Move CA-related Kconfig entries into `components/ca_manager/Kconfig`.
 - Keep Wi-Fi and example-only config in `main/Kconfig.projbuild`.
 - Keep `main/main.c` as an integration example.
-- Remove or de-emphasize direct HTTP update from `ca_manager`; keep streaming/file apply APIs as the stable core.
+- Remove direct HTTP update from `ca_manager`; keep streaming/file apply APIs as the stable core.
 
 ### Phase 2: CA Apply API
 
@@ -414,11 +418,11 @@ Can be postponed:
 - Wire the adapter to `manifest_file_updater_run()`.
 - Update `main/main.c` to demonstrate manifest-driven CA update.
 
-### Phase 5: ESP32 Integration Test Mode
+### Phase 5: ESP32 Integration Diagnostics
 
-- Add terminal commands in the example app for manifest fetch, full update, verify-only download, local apply, and status.
+- Keep boot HTTPS diagnostics in the example app for proving that the active CA bundle works against real endpoints.
 - Document a set of local or hosted HTTPS URLs for success and failure scenarios.
-- Make boot-time automatic update optional so manual testing can run without immediate side effects.
+- Keep boot-time automatic update and diagnostics configured by existing example-app Kconfig strings.
 
 ### Phase 6: Periodic Scheduling
 
@@ -461,13 +465,11 @@ The key rule is that option 3 should emerge by adding new adapters and policies 
 
 ## Open Decisions
 
-- Whether to remove `ca_manager_update_from_http_client()` immediately or keep it as a compatibility helper for one release.
 - Whether the first version comparator is string equality only or accepts a callback.
 - Whether manifest signing is required before public use, or postponed until HTTPS plus SHA-256 and mirror fallback are validated in practice.
 - Whether non-HTTPS artifact mirrors are ever allowed, and if so only after signed manifests are mandatory.
 - How signing keys are generated, stored, rotated, and revoked.
 - Whether `version` for CA bundles should be date-based, Mozilla certdata revision based, or generated build timestamp based.
-- Whether the ESP32 manual test interface should use ESP-IDF console or a minimal UART command loop.
 
 ## Recommended First Cut
 
