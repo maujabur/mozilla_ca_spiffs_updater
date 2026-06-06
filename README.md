@@ -43,23 +43,37 @@ A URL deve servir um arquivo binario no formato `x509_crt_bundle` do ESP-IDF, ge
 
 O diretorio `tools/certificate_prepare` contem um preparador Python para gerar esse `bundle_ca.bin` a partir do `certdata.txt` da Mozilla, com suporte a download automatico e override por arquivo local.
 
-Para GitHub Releases, configure URLs estaveis usando `latest/download`:
+Para publicar o bundle, use um repositorio separado de artefatos. Uma estrutura
+simples e compativel com GitHub Pages seria:
 
 ```text
-https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.manifest.json
+mozilla_ca_spiffs_artifacts/
+  ca/stable/
+    bundle_ca.bin
+    bundle_ca.manifest.json
+    bundle_ca.version
+    bundle_ca.sha256
 ```
 
-O script de release gera e publica `bundle_ca.manifest.json`, `bundle_ca.bin`, `bundle_ca.version` e `bundle_ca.sha256`:
+Com GitHub Pages habilitado nesse repo, a URL configurada no firmware fica:
+
+```text
+https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable/bundle_ca.manifest.json
+```
+
+Para gerar os arquivos dentro de um clone local do repo de artefatos:
 
 ```bash
-tools/certificate_prepare/create_release.sh 1.0.1
+python tools/certificate_prepare/package_artifacts.py 1.0.9 \
+  --prepare \
+  --out-dir ../mozilla_ca_spiffs_artifacts/ca/stable \
+  --base-url https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable
 ```
 
-Para regenerar o bundle imediatamente antes de publicar:
-
-```bash
-tools/certificate_prepare/create_release.sh 1.0.1 --prepare
-```
+Depois publique esse outro repositorio com `git add`, `git commit` e `git push`.
+O manifest atual usa `url` unico; a ferramenta tambem aceita
+`--extra-artifact-url` para registrar URLs extras no campo `urls`, preparando o
+caminho para fallback por mirrors quando o firmware passar a consumir essa lista.
 
 ## Diagnostico HTTPS
 

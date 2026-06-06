@@ -10,4 +10,4 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_SPIFFS_USE_MAGIC=y
 CONFIG_SPIFFS_USE_MAGIC_LENGTH=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
-CONFIG_CA_UPDATER_BOOT_HTTPS_TEST_URLS="https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/latest/download/bundle_ca.manifest.json"
+CONFIG_CA_UPDATER_BOOT_HTTPS_TEST_URLS="https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable/bundle_ca.manifest.json"

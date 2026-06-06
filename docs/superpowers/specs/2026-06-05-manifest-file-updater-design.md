@@ -135,8 +135,8 @@ Suggested future manifest fields for mirrored and signed CA bundle delivery:
   "version": "1.0.8",
   "build_id": "2026-06-05T00:00:00Z-ca",
   "urls": [
-    "https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/download/v1.0.8/bundle_ca.bin",
-    "https://updates.example.net/ca/stable/bundle_ca.bin"
+    "https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable/bundle_ca.bin",
+    "https://raw.githubusercontent.com/maujabur/mozilla_ca_spiffs_artifacts/main/ca/stable/bundle_ca.bin"
   ],
   "sha256": "hexadecimal_sha256_do_arquivo",
   "size": 56244,
@@ -435,7 +435,7 @@ Can be postponed:
 
 - Extend `tools/certificate_prepare` or add a sibling tool to emit a manifest for the generated `bundle_ca.bin`.
 - Include `version`, `build_id`, `size`, and `sha256`.
-- Document how to host both manifest and binary.
+- Document how to host both manifest and binary in a separate artifact repository.
 - Add release-script support for optional mirror URLs.
 
 ### Phase 8: Signed Manifest Trust Boundary

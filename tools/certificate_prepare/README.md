@@ -35,6 +35,37 @@ python tools/certificate_prepare/prepare.py \
 
 O arquivo `mozilla_ca.pem` fica no `--work-dir`. O binario final deve ser publicado e referenciado pelo `url` do `bundle_ca.manifest.json`.
 
+## Pacote de artefatos
+
+Para publicar o bundle em um repositorio separado de artefatos, gere o pacote em
+um diretorio que possa ser commitado nesse repo:
+
+```bash
+python tools/certificate_prepare/package_artifacts.py 1.0.9 \
+  --prepare \
+  --out-dir ../mozilla_ca_spiffs_artifacts/ca/stable \
+  --base-url https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable
+```
+
+Isso gera:
+
+- `bundle_ca.bin`
+- `bundle_ca.manifest.json`
+- `bundle_ca.version`
+- `bundle_ca.sha256`
+
+Se quiser registrar mirrors para uso futuro, adicione uma ou mais URLs:
+
+```bash
+python tools/certificate_prepare/package_artifacts.py 1.0.9 \
+  --out-dir ../mozilla_ca_spiffs_artifacts/ca/stable \
+  --base-url https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable \
+  --extra-artifact-url https://raw.githubusercontent.com/maujabur/mozilla_ca_spiffs_artifacts/main/ca/stable/bundle_ca.bin
+```
+
+O firmware atual ainda consome o campo `url`. O campo `urls`, quando presente,
+fica reservado para a etapa de fallback por mirrors.
+
 ## Validacao
 
 Por padrao, o script rejeita saidas maiores que `262144` bytes, o mesmo limite de `CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE`.

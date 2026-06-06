@@ -397,7 +397,7 @@ real trust boundary with a firmware-verified signature.
 
 **Files likely involved:**
 - Modify: `main/main.c`
-- Modify: `tools/certificate_prepare/create_release.sh`
+- Modify: `tools/certificate_prepare/package_artifacts.py`
 - Modify: `tools/certificate_prepare/prepare.py`
 - Modify: `tools/certificate_prepare/README.md`
 - Modify or create: manifest updater component files when split from `main/`
@@ -442,8 +442,8 @@ Example shape:
   "version": "1.0.8",
   "build_id": "2026-06-05T00:00:00Z-ca",
   "urls": [
-    "https://github.com/maujabur/mozilla_ca_spiffs_updater/releases/download/v1.0.8/bundle_ca.bin",
-    "https://updates.example.net/ca/stable/bundle_ca.bin"
+    "https://maujabur.github.io/mozilla_ca_spiffs_artifacts/ca/stable/bundle_ca.bin",
+    "https://raw.githubusercontent.com/maujabur/mozilla_ca_spiffs_artifacts/main/ca/stable/bundle_ca.bin"
   ],
   "sha256": "hexadecimal_sha256_do_arquivo",
   "size": 56244
