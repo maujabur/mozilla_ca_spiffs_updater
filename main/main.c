@@ -24,6 +24,8 @@ static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_wifi_retry_count;
 
+// ----- Example Wi-Fi connection -----
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -90,6 +92,10 @@ static esp_err_t connect_wifi(void)
     return ESP_FAIL;
 }
 
+// ----- End example Wi-Fi connection -----
+
+// ----- CA bundle update flow -----
+
 static void log_active_bundle_state(const char *prefix)
 {
     char active_version[CA_VERSION_BUFFER_SIZE];
@@ -118,6 +124,10 @@ static esp_err_t update_bundle_if_needed(void)
     };
     return ca_manifest_updater_run(&config, NULL);
 }
+
+// ----- End CA bundle update flow -----
+
+// ----- Example HTTPS diagnostics -----
 
 static void trim_in_place(char *text)
 {
@@ -178,6 +188,10 @@ static void run_boot_https_diagnostics(void)
     }
 }
 
+// ----- End example HTTPS diagnostics -----
+
+// ----- Application entry point -----
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -200,3 +214,5 @@ void app_main(void)
 
     log_active_bundle_state("Ready.");
 }
+
+// ----- End application entry point -----

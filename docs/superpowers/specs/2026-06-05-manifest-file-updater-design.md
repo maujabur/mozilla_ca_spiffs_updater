@@ -448,20 +448,104 @@ Can be postponed:
 - Keep support for HTTPS mirrors; only consider non-HTTPS artifact URLs after
   signed manifests are mandatory.
 
-## Expansion Toward A Generic Framework
+## Roadmap Toward A Generic Framework
 
-The path from option 2 to option 3 is additive:
+The current `manifest_file_updater` is already generic at the most important
+boundary: it downloads and verifies a file, then hands a verified local path to a
+domain-specific `apply()` callback. The roadmap below keeps that boundary intact
+and grows the system around adapters and policy modules, not by making
+`ca_manager` more general.
 
-- Add `ota_manifest_updater` that uses the same manifest updater but applies via ESP-IDF OTA.
-- Add support for domain-specific version comparators.
-- Add signed manifests after the HTTPS-only version and mirror fallback are working.
-- Add ETag or `If-None-Match` support for bandwidth reduction.
-- Add persistent update state for last check, last applied build, and failed build suppression.
+### R0: Current Baseline
+
+Status: implemented.
+
+- `ca_manager` owns only CA bundle storage, validation, activation, and promotion.
+- `manifest_file_updater` owns HTTPS manifest download, artifact download,
+  redirects, size validation, SHA-256 validation, and temp-file cleanup.
+- `ca_manifest_updater` adapts the generic updater to `ca_manager_apply_file()`.
+- `main/` remains an ESP-IDF example app with Wi-Fi, boot diagnostics, and the
+  CA update flow.
+
+### R1: Harden The Existing Single-Artifact Flow
+
+Goal: make the current CA updater boringly reliable before broadening the
+framework.
+
+- Exercise hardware cases for current version, new version, SHA mismatch,
+  invalid bundle, interrupted download, unavailable Wi-Fi, unavailable manifest,
+  and SPIFFS-full behavior.
+- Tighten error mapping so callers can distinguish no-update, network failure,
+  manifest validation failure, artifact validation failure, and apply failure.
+- Add small comments to public headers where ownership, temp-file lifetime, and
+  callback guarantees matter.
+- Keep diagnostics in `main/`; do not move debug policy into reusable components.
+
+### R2: Mirror Fallback
+
+Goal: improve availability without changing the trust model.
+
+- Extend the manifest schema to accept either `url` or `urls`.
+- Normalize artifact locations into an internal URL list.
+- Reject empty, malformed, non-HTTPS, or overlong URLs.
+- Try mirrors in manifest order until one artifact downloads and verifies.
+- Log each failed mirror and the accepted mirror.
+- Extend release tooling to publish optional mirror URLs.
+
+### R3: Version And Result Policy Hooks
+
+Goal: keep the updater generic for domains where string equality is not enough.
+
+- Add an optional version comparator callback to replace fixed string equality.
+- Preserve simple string equality as the default.
+- Add optional caller-facing result details for skipped, downloaded, applied,
+  corrected, failed-before-apply, and failed-during-apply cases.
+- Keep scheduling and retry policy outside `manifest_file_updater`.
+
+### R4: Signed Manifests
+
+Goal: move trust from HTTPS-only transport metadata to firmware-verifiable
+metadata.
+
+- Add firmware-embedded public signing key configuration.
+- Define canonicalization rules for exactly which manifest bytes are signed.
+- Add `signature_algorithm`, `signing_key_id`, and `signature` fields.
+- Verify the signature before using artifact metadata.
+- Extend release tooling to sign `bundle_ca.manifest.json`.
+- Keep non-HTTPS artifact URLs forbidden until signed manifests are mandatory
+  and tested.
+
+### R5: OTA Adapter
+
+Goal: prove that `manifest_file_updater` is reusable beyond CA bundles.
+
+- Add `ota_manifest_updater` as a separate adapter component.
+- Reuse manifest fetch, artifact download, size checks, SHA-256 verification,
+  and the `apply()` callback.
+- Apply the verified file through ESP-IDF OTA APIs.
+- Keep OTA partition selection, reboot policy, and rollback policy in the OTA
+  adapter, not in `manifest_file_updater`.
+
+### R6: Operational Efficiency
+
+Goal: reduce bandwidth and make unattended operation cleaner.
+
+- Add ETag or `If-None-Match` support.
+- Add persistent update state for last check, last applied build, and failed
+  build suppression.
+- Add progress callbacks for UI/logging.
+- Add example scheduling with bounded retry/backoff, gated on Wi-Fi readiness
+  and valid system time.
+- Keep periodic scheduling as example-app or adapter policy.
+
+### R7: Multi-Artifact And Storage Backends
+
+Goal: support richer products only when a real use case appears.
+
 - Add multi-artifact manifests when one device needs coordinated updates.
-- Add storage backends beyond SPIFFS, such as LittleFS, FATFS, NVS blobs, or OTA partitions.
-- Add progress callbacks and retry/backoff policy.
-
-The key rule is that option 3 should emerge by adding new adapters and policies around `manifest_file_updater`, not by making `ca_manager` more general.
+- Add storage backends beyond SPIFFS, such as LittleFS, FATFS, NVS blobs, or OTA
+  partitions.
+- Keep the single-artifact API stable for simple devices.
 
 ## Open Decisions
 

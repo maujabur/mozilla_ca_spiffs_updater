@@ -101,3 +101,4 @@ idf.py -p /dev/ttyACM0 flash monitor
 - Clientes HTTPS, OTA e MQTT que usam `.crt_bundle_attach = esp_crt_bundle_attach` passam a usar o bundle ativado por `esp_crt_bundle_set()`.
 - Se o download falhar ou o bundle novo for invalido, o arquivo ativo anterior permanece preservado.
 - Para integracao com atualizadores baseados em manifesto, prefira `manifest_file_updater` + `ca_manager_apply_file(path, restart_on_success)`: a camada externa baixa e verifica o artefato, e o `ca_manager` valida semanticamente o bundle antes de promove-lo.
+- O roadmap para tornar `manifest_file_updater` uma base mais generica fica em `docs/superpowers/specs/2026-06-05-manifest-file-updater-design.md`.
