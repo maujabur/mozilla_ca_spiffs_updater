@@ -83,6 +83,50 @@ ca update [manifest_url]
 tamanho anunciado. Ele e util para testar GitHub Releases, mirrors e servidores
 com cadeias de certificados diferentes sem trocar o firmware.
 
+### Monitor interativo no ESP32-S3 USB Serial/JTAG
+
+Para enviar comandos ao prompt `ca>` pelo USB nativo do ESP32-S3, mantenha o
+console do ESP-IDF roteado para o controlador USB Serial/JTAG. O projeto fixa
+isso em `sdkconfig.defaults` com `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`; se o
+`sdkconfig` ja existir, confirme em `idf.py menuconfig`:
+
+```text
+Component config -> ESP System Settings -> Channel for console output -> USB Serial/JTAG Controller
+```
+
+No host Linux, o usuario que abre o Dev Container deve pertencer ao grupo
+`dialout`, pois a permissao da `/dev/ttyACM0` nasce no host:
+
+```bash
+sudo usermod -aG dialout seu_usuario_host
+```
+
+Depois de alterar o grupo, encerre a sessao do usuario no host e entre de novo.
+Dentro do Dev Container o usuario normalmente e `root`, entao `sudo` nao e
+necessario para acessar a porta.
+
+Para evitar travamento de escrita causado por sinais DTR/RTS na USB Serial/JTAG,
+abra o monitor em um terminal do Dev Container com o script da raiz do projeto:
+
+```bash
+./monitor.sh
+```
+
+Por padrao ele usa `/dev/ttyACM0` e executa:
+
+```bash
+idf.py -p /dev/ttyACM0 monitor --no-reset
+```
+
+Para usar outra porta:
+
+```bash
+./monitor.sh /dev/ttyACM1
+```
+
+Se a selecao do canal de console foi alterada em um `sdkconfig` ja gerado, rode
+`idf.py fullclean` e faca um novo build antes de testar o prompt interativo.
+
 ## Exemplo com chunks do `esp_http_client`
 
 Quando o download for conduzido por um handler de eventos, mantenha o contexto entre eventos e envie cada bloco recebido ao `ca_manager`:
