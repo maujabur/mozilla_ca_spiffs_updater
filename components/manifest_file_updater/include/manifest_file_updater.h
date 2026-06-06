@@ -17,6 +17,7 @@ extern "C" {
 #define MANIFEST_FILE_UPDATER_URL_SIZE 256
 #define MANIFEST_FILE_UPDATER_SHA256_HEX_SIZE 65
 #define MANIFEST_FILE_UPDATER_TEMP_FILENAME "manifest_artifact.tmp"
+#define MANIFEST_FILE_UPDATER_COMPONENT_VERSION "0.1.0"
 
 typedef struct {
     const char *artifact_type;
@@ -49,6 +50,8 @@ typedef enum {
 typedef esp_err_t (*manifest_file_apply_fn)(const char *verified_path,
                                             const manifest_file_artifact_t *artifact,
                                             void *user_ctx);
+
+const char *manifest_file_updater_get_component_version(void);
 
 esp_err_t manifest_file_updater_probe_https(const char *url,
                                             int *out_status,

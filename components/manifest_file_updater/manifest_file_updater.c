@@ -20,6 +20,11 @@
 
 static const char *TAG = "manifest_file";
 
+const char *manifest_file_updater_get_component_version(void)
+{
+    return MANIFEST_FILE_UPDATER_COMPONENT_VERSION;
+}
+
 static bool is_http_redirect_status(int status)
 {
     return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;

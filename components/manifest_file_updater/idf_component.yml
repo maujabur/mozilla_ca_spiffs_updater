@@ -1,0 +1,6 @@
+version: "0.1.0"
+description: Generic HTTPS manifest file updater with size and SHA-256 verification.
+url: https://github.com/maujabur/mozilla_ca_spiffs_updater/tree/main/components/manifest_file_updater
+dependencies:
+  idf: ">=6.2"
+  espressif/cjson: "^1.7.19"

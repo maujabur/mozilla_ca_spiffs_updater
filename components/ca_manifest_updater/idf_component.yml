@@ -1,0 +1,11 @@
+version: "0.1.0"
+description: CA bundle adapter for manifest_file_updater and ca_manager.
+url: https://github.com/maujabur/mozilla_ca_spiffs_updater/tree/main/components/ca_manifest_updater
+dependencies:
+  idf: ">=6.2"
+  ca_manager:
+    override_path: ../ca_manager
+    require: public
+  manifest_file_updater:
+    override_path: ../manifest_file_updater
+    require: public

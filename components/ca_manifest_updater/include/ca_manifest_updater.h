@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+#define CA_MANIFEST_UPDATER_COMPONENT_VERSION "0.1.0"
+
 typedef struct {
     const char *manifest_url;
     const char *channel;
@@ -22,6 +24,8 @@ typedef enum {
     CA_MANIFEST_UPDATER_RESULT_VERSION_CORRECTED,
     CA_MANIFEST_UPDATER_RESULT_APPLIED,
 } ca_manifest_updater_result_t;
+
+const char *ca_manifest_updater_get_component_version(void);
 
 esp_err_t ca_manifest_updater_fetch(const char *manifest_url,
                                     const char *channel,

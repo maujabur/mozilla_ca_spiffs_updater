@@ -32,6 +32,11 @@ static uint8_t *s_active_bundle;
 static size_t s_active_bundle_size;
 static bool s_spiffs_mounted;
 
+const char *ca_manager_get_component_version(void)
+{
+    return CA_MANAGER_COMPONENT_VERSION;
+}
+
 static int hex_value(char c)
 {
     if (c >= '0' && c <= '9') {

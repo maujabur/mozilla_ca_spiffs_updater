@@ -12,6 +12,10 @@ extern "C" {
 
 typedef struct ca_manager_update_ctx ca_manager_update_ctx_t;
 
+#define CA_MANAGER_COMPONENT_VERSION "0.1.0"
+
+const char *ca_manager_get_component_version(void);
+
 esp_err_t ca_manager_init(void);
 size_t ca_manager_get_active_bundle_size(void);
 esp_err_t ca_manager_get_active_version(char *out_version, size_t out_size);

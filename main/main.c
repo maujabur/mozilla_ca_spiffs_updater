@@ -12,6 +12,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "manifest_file_updater.h"
 #include "nvs_flash.h"
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -125,6 +126,14 @@ static esp_err_t update_bundle_if_needed(void)
     return ca_manifest_updater_run(&config, NULL);
 }
 
+static void log_component_versions(void)
+{
+    ESP_LOGI(TAG, "Component versions: ca_manager=%s manifest_file_updater=%s ca_manifest_updater=%s",
+             ca_manager_get_component_version(),
+             manifest_file_updater_get_component_version(),
+             ca_manifest_updater_get_component_version());
+}
+
 // ----- End CA bundle update flow -----
 
 // ----- Example HTTPS diagnostics -----
@@ -202,6 +211,7 @@ void app_main(void)
     ESP_ERROR_CHECK(err);
 
     ESP_ERROR_CHECK(ca_manager_init());
+    log_component_versions();
     log_active_bundle_state("Boot");
 
     if (connect_wifi() == ESP_OK) {

@@ -13,6 +13,11 @@
 
 static const char *TAG = "ca_manifest";
 
+const char *ca_manifest_updater_get_component_version(void)
+{
+    return CA_MANIFEST_UPDATER_COMPONENT_VERSION;
+}
+
 typedef struct {
     bool restart_on_update;
 } ca_manifest_apply_ctx_t;

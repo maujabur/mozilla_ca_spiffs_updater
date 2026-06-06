@@ -82,6 +82,44 @@ ESP_ERROR_CHECK(ca_manager_apply_file("/spiffs/manifest_artifact.tmp", true));
 O componente `ca_manager` nao faz HTTP. Downloads, redirects, verificacao de
 tamanho e SHA-256 pertencem a `manifest_file_updater`.
 
+## Uso em outros projetos
+
+Os componentes podem ser consumidos diretamente deste repositorio via ESP-IDF
+Component Manager. Para usar o fluxo completo de CA, adicione no
+`main/idf_component.yml` do projeto consumidor:
+
+```yaml
+dependencies:
+  ca_manifest_updater:
+    git: https://github.com/maujabur/mozilla_ca_spiffs_updater.git
+    path: components/ca_manifest_updater
+    version: lib-v0.1.0
+```
+
+`ca_manifest_updater` declara `ca_manager` e `manifest_file_updater` como
+dependencias do mesmo repositorio. Se o projeto precisar apenas de um bloco
+menor, tambem pode depender diretamente de um componente especifico:
+
+```yaml
+dependencies:
+  manifest_file_updater:
+    git: https://github.com/maujabur/mozilla_ca_spiffs_updater.git
+    path: components/manifest_file_updater
+    version: lib-v0.1.0
+```
+
+Use tags `lib-vX.Y.Z` para versionar a API e implementacao dos componentes. O
+versionamento do bundle de CAs publicado para o dispositivo deve ser separado
+do versionamento da biblioteca.
+
+Cada componente expoe a propria versao em runtime:
+
+```c
+ESP_LOGI(TAG, "ca_manager=%s", ca_manager_get_component_version());
+ESP_LOGI(TAG, "manifest_file_updater=%s", manifest_file_updater_get_component_version());
+ESP_LOGI(TAG, "ca_manifest_updater=%s", ca_manifest_updater_get_component_version());
+```
+
 ## Build no container
 
 No VS Code, abra a pasta `mozilla_ca_spiffs_updater` no Dev Container.
