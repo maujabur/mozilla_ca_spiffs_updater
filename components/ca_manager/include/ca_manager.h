@@ -26,14 +26,6 @@ esp_err_t ca_manager_update_write(ca_manager_update_ctx_t *ctx, const uint8_t *d
 esp_err_t ca_manager_update_finish(ca_manager_update_ctx_t *ctx, bool restart_on_success);
 void ca_manager_update_abort(ca_manager_update_ctx_t *ctx);
 
-esp_err_t ca_manager_update_from_http_client(const char *url, bool restart_on_success);
-esp_err_t ca_manager_update_from_http_client_verified(const char *url,
-                                                      const char *expected_sha256_hex,
-                                                      size_t expected_size,
-                                                      bool restart_on_success,
-                                                      bool *out_promoted);
-esp_err_t ca_manager_download_text(const char *url, char *out_text, size_t out_size);
-
 #ifdef __cplusplus
 }
 #endif

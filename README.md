@@ -68,51 +68,19 @@ interativa pela serial. Configure uma lista separada por virgulas em `Boot HTTPS
 diagnostic URLs`. Depois que o Wi-Fi conecta, o log mostra status HTTP,
 `content_length` e resultado TLS/HTTP de cada URL.
 
-## Exemplo com chunks do `esp_http_client`
+## Aplicacao de arquivo verificado
 
-Quando o download for conduzido por um handler de eventos, mantenha o contexto entre eventos e envie cada bloco recebido ao `ca_manager`:
+Quando uma camada externa ja baixou e verificou o artefato, entregue o arquivo
+local ao `ca_manager`:
 
 ```c
 #include "ca_manager.h"
-#include "esp_check.h"
-#include "esp_http_client.h"
 
-static ca_manager_update_ctx_t *s_ca_update_ctx;
-
-static esp_err_t ca_http_event_handler(esp_http_client_event_t *evt)
-{
-    switch (evt->event_id) {
-    case HTTP_EVENT_ON_DATA:
-        if (s_ca_update_ctx == NULL) {
-            int64_t len = esp_http_client_get_content_length(evt->client);
-            size_t expected_size = len > 0 ? (size_t)len : 0;
-            ESP_RETURN_ON_ERROR(ca_manager_update_begin(&s_ca_update_ctx, expected_size),
-                                "ca_example", "begin failed");
-        }
-        return ca_manager_update_write(s_ca_update_ctx, evt->data, evt->data_len);
-
-    case HTTP_EVENT_ON_FINISH:
-        if (s_ca_update_ctx != NULL) {
-            ca_manager_update_ctx_t *ctx = s_ca_update_ctx;
-            s_ca_update_ctx = NULL;
-            return ca_manager_update_finish(ctx, true);
-        }
-        break;
-
-    case HTTP_EVENT_DISCONNECTED:
-        ca_manager_update_abort(s_ca_update_ctx);
-        s_ca_update_ctx = NULL;
-        break;
-
-    default:
-        break;
-    }
-
-    return ESP_OK;
-}
+ESP_ERROR_CHECK(ca_manager_apply_file("/spiffs/manifest_artifact.tmp", true));
 ```
 
-O fluxo pronto `ca_manager_update_from_http_client(url, true)` usa a mesma API de streaming internamente.
+O componente `ca_manager` nao faz HTTP. Downloads, redirects, verificacao de
+tamanho e SHA-256 pertencem a `manifest_file_updater`.
 
 ## Build no container
 

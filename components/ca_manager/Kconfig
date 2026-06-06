@@ -20,8 +20,4 @@ menu "CA manager"
         int "Maximum bundle size"
         default 262144
 
-    config CA_UPDATER_HTTP_TIMEOUT_MS
-        int "HTTP timeout in milliseconds"
-        default 15000
-
 endmenu
