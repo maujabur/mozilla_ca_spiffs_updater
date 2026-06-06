@@ -1,5 +1,8 @@
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "ca_manager.h"
 #include "cJSON.h"
@@ -15,6 +18,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "mbedtls/private/sha256.h"
 #include "nvs_flash.h"
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -29,6 +33,8 @@
 #define CA_HTTP_TX_BUFFER_SIZE 4096
 #define CA_MAX_HTTP_REDIRECTS 5
 #define CA_BOOT_HTTPS_TEST_URLS_BUFFER_SIZE 768
+#define CA_ARTIFACT_DOWNLOAD_BUFFER_SIZE 4096
+#define CA_ARTIFACT_TEMP_FILENAME "manifest_bundle.tmp"
 
 typedef struct {
     char version[CA_VERSION_BUFFER_SIZE];
@@ -40,6 +46,43 @@ typedef struct {
 static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_wifi_retry_count;
+
+static int hex_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static esp_err_t sha256_hex_to_bytes(const char *hex, uint8_t out[32])
+{
+    if (hex == NULL || out == NULL || strlen(hex) != CA_SHA256_HEX_SIZE) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    for (size_t i = 0; i < 32; i++) {
+        int high = hex_value(hex[i * 2]);
+        int low = hex_value(hex[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        out[i] = (uint8_t)((high << 4) | low);
+    }
+
+    return ESP_OK;
+}
+
+static void build_artifact_temp_path(char *path, size_t path_size)
+{
+    snprintf(path, path_size, "%s/%s", CONFIG_CA_UPDATER_SPIFFS_BASE_PATH, CA_ARTIFACT_TEMP_FILENAME);
+}
 
 static bool is_http_redirect_status(int status)
 {
@@ -230,6 +273,193 @@ static esp_err_t load_manifest_from_url(const char *url, ca_bundle_manifest_t *m
     return parse_manifest(manifest_text, manifest);
 }
 
+static esp_err_t download_artifact_to_file_verified(const ca_bundle_manifest_t *manifest,
+                                                    const char *dest_path)
+{
+    if (manifest == NULL || dest_path == NULL || dest_path[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (manifest->size == 0 || manifest->size > CONFIG_CA_UPDATER_MAX_BUNDLE_SIZE) {
+        ESP_LOGE(TAG, "Invalid manifest artifact size: %u", (unsigned)manifest->size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint8_t expected_sha256[32];
+    ESP_RETURN_ON_ERROR(sha256_hex_to_bytes(manifest->sha256, expected_sha256),
+                        TAG, "Invalid manifest SHA-256");
+
+    esp_http_client_config_t config = {
+        .url = manifest->url,
+        .timeout_ms = CONFIG_CA_UPDATER_HTTP_TIMEOUT_MS,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true,
+        .max_redirection_count = CA_MAX_HTTP_REDIRECTS,
+        .buffer_size_tx = CA_HTTP_TX_BUFFER_SIZE,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
+    FILE *file = NULL;
+    uint8_t *buffer = NULL;
+    esp_err_t err = ESP_OK;
+    mbedtls_sha256_context sha_ctx;
+    mbedtls_sha256_init(&sha_ctx);
+
+    if (mbedtls_sha256_starts(&sha_ctx, 0) != 0) {
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+
+    int64_t content_length = 0;
+    int status = 0;
+    for (int redirect_count = 0; redirect_count <= CA_MAX_HTTP_REDIRECTS; redirect_count++) {
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Artifact HTTP open failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+
+        content_length = esp_http_client_fetch_headers(client);
+        if (content_length < 0) {
+            ESP_LOGE(TAG, "Artifact HTTP fetch headers failed: %lld", content_length);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        status = esp_http_client_get_status_code(client);
+        if (!is_http_redirect_status(status)) {
+            break;
+        }
+
+        ESP_LOGI(TAG, "Following artifact HTTP redirect: status=%d", status);
+        err = esp_http_client_set_redirection(client);
+        esp_http_client_close(client);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Artifact HTTP redirect failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+    }
+
+    if (status != 200) {
+        ESP_LOGE(TAG, "Unexpected artifact HTTP status: %d", status);
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+    if (content_length > 0 && (size_t)content_length != manifest->size) {
+        ESP_LOGE(TAG, "Artifact content length mismatch: expected=%u actual=%lld",
+                 (unsigned)manifest->size, content_length);
+        err = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    unlink(dest_path);
+    file = fopen(dest_path, "wb");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Failed to open artifact temp file %s: errno=%d", dest_path, errno);
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+
+    buffer = malloc(CA_ARTIFACT_DOWNLOAD_BUFFER_SIZE);
+    if (buffer == NULL) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    size_t written_size = 0;
+    while (content_length <= 0 || written_size < (size_t)content_length) {
+        int bytes_to_read = CA_ARTIFACT_DOWNLOAD_BUFFER_SIZE;
+        if (content_length > 0) {
+            size_t remaining = (size_t)content_length - written_size;
+            bytes_to_read = remaining < CA_ARTIFACT_DOWNLOAD_BUFFER_SIZE ?
+                            (int)remaining : CA_ARTIFACT_DOWNLOAD_BUFFER_SIZE;
+        }
+
+        int read_len = esp_http_client_read(client, (char *)buffer, bytes_to_read);
+        if (read_len < 0) {
+            ESP_LOGE(TAG, "Artifact HTTP read failed");
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+        if (read_len == 0) {
+            if (esp_http_client_is_complete_data_received(client)) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        if (written_size > manifest->size || (size_t)read_len > manifest->size - written_size) {
+            ESP_LOGE(TAG, "Artifact exceeds manifest size");
+            err = ESP_ERR_INVALID_SIZE;
+            goto cleanup;
+        }
+
+        if (fwrite(buffer, 1, (size_t)read_len, file) != (size_t)read_len) {
+            ESP_LOGE(TAG, "Failed to write artifact temp file: errno=%d", errno);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+        if (mbedtls_sha256_update(&sha_ctx, buffer, (size_t)read_len) != 0) {
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+        written_size += (size_t)read_len;
+    }
+
+    if (written_size != manifest->size) {
+        ESP_LOGE(TAG, "Artifact size mismatch: expected=%u actual=%u",
+                 (unsigned)manifest->size, (unsigned)written_size);
+        err = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    uint8_t actual_sha256[32];
+    if (mbedtls_sha256_finish(&sha_ctx, actual_sha256) != 0) {
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+    if (memcmp(actual_sha256, expected_sha256, sizeof(actual_sha256)) != 0) {
+        ESP_LOGE(TAG, "Artifact SHA-256 mismatch");
+        err = ESP_ERR_INVALID_CRC;
+        goto cleanup;
+    }
+
+    if (fflush(file) != 0) {
+        ESP_LOGE(TAG, "Failed to flush artifact temp file: errno=%d", errno);
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+    if (fsync(fileno(file)) != 0) {
+        ESP_LOGE(TAG, "Failed to sync artifact temp file: errno=%d", errno);
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+    if (fclose(file) != 0) {
+        ESP_LOGE(TAG, "Failed to close artifact temp file: errno=%d", errno);
+        file = NULL;
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+    file = NULL;
+
+cleanup:
+    if (file != NULL) {
+        fclose(file);
+    }
+    if (err != ESP_OK) {
+        unlink(dest_path);
+    }
+    mbedtls_sha256_free(&sha_ctx);
+    free(buffer);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return err;
+}
+
 static esp_err_t apply_manifest_if_needed(const ca_bundle_manifest_t *manifest)
 {
     char active_version[CA_VERSION_BUFFER_SIZE];
@@ -258,20 +488,15 @@ static esp_err_t apply_manifest_if_needed(const ca_bundle_manifest_t *manifest)
         return ESP_OK;
     }
 
-    bool promoted = false;
-    ESP_RETURN_ON_ERROR(ca_manager_update_from_http_client_verified(manifest->url,
-                                                                    manifest->sha256,
-                                                                    manifest->size,
-                                                                    false,
-                                                                    &promoted),
-                        TAG, "Bundle download/apply failed");
+    char artifact_path[128];
+    build_artifact_temp_path(artifact_path, sizeof(artifact_path));
+    ESP_RETURN_ON_ERROR(download_artifact_to_file_verified(manifest, artifact_path),
+                        TAG, "Bundle download/verification failed");
+    err = ca_manager_apply_file(artifact_path, false);
+    unlink(artifact_path);
+    ESP_RETURN_ON_ERROR(err, TAG, "Bundle apply failed");
     ESP_RETURN_ON_ERROR(ca_manager_set_active_version(manifest->version),
                         TAG, "Failed to store CA bundle version");
-
-    if (!promoted) {
-        ESP_LOGI(TAG, "CA bundle version corrected to %s; restart not needed", manifest->version);
-        return ESP_OK;
-    }
 
     ESP_LOGI(TAG, "CA bundle updated to version %s; restarting", manifest->version);
     fflush(stdout);
