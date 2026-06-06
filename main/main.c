@@ -4,10 +4,8 @@
 #include "ca_manifest_updater.h"
 #include "ca_manager.h"
 #include "esp_check.h"
-#include "esp_crt_bundle.h"
 #include "esp_err.h"
 #include "esp_event.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
@@ -20,18 +18,11 @@
 #define WIFI_FAIL_BIT BIT1
 #define MAX_WIFI_RETRY 8
 #define CA_VERSION_BUFFER_SIZE 32
-#define CA_HTTP_TX_BUFFER_SIZE 4096
-#define CA_MAX_HTTP_REDIRECTS 5
 #define CA_BOOT_HTTPS_TEST_URLS_BUFFER_SIZE 768
 
 static const char *TAG = "ca_updater";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_wifi_retry_count;
-
-static bool is_http_redirect_status(int status)
-{
-    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
-}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -128,74 +119,6 @@ static esp_err_t update_bundle_if_needed(void)
     return ca_manifest_updater_run(&config, NULL);
 }
 
-static esp_err_t probe_https_url(const char *url, int *out_status, int64_t *out_content_length)
-{
-    if (url == NULL || url[0] == '\0' || out_status == NULL || out_content_length == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (strncmp(url, "https://", strlen("https://")) != 0) {
-        ESP_LOGE(TAG, "URL must use https");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    *out_status = 0;
-    *out_content_length = 0;
-
-    esp_http_client_config_t config = {
-        .url = url,
-        .timeout_ms = CONFIG_CA_UPDATER_HTTP_TIMEOUT_MS,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .keep_alive_enable = true,
-        .max_redirection_count = CA_MAX_HTTP_REDIRECTS,
-        .buffer_size_tx = CA_HTTP_TX_BUFFER_SIZE,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == NULL) {
-        return ESP_FAIL;
-    }
-
-    esp_err_t err = ESP_OK;
-    int status = 0;
-    int64_t content_length = 0;
-    for (int redirect_count = 0; redirect_count <= CA_MAX_HTTP_REDIRECTS; redirect_count++) {
-        err = esp_http_client_open(client, 0);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
-            goto cleanup;
-        }
-
-        content_length = esp_http_client_fetch_headers(client);
-        if (content_length < 0) {
-            ESP_LOGE(TAG, "HTTP fetch headers failed: %lld", content_length);
-            err = ESP_FAIL;
-            goto cleanup;
-        }
-
-        status = esp_http_client_get_status_code(client);
-        if (!is_http_redirect_status(status)) {
-            break;
-        }
-
-        ESP_LOGI(TAG, "Following HTTP redirect: status=%d", status);
-        err = esp_http_client_set_redirection(client);
-        esp_http_client_close(client);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "HTTP redirect failed: %s", esp_err_to_name(err));
-            goto cleanup;
-        }
-    }
-
-    *out_status = status;
-    *out_content_length = content_length;
-    err = status >= 200 && status < 300 ? ESP_OK : ESP_FAIL;
-
-cleanup:
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    return err;
-}
-
 static void trim_in_place(char *text)
 {
     if (text == NULL) {
@@ -223,6 +146,8 @@ static void trim_in_place(char *text)
 
 static void run_boot_https_diagnostics(void)
 {
+    // Example-app only: boot diagnostics demonstrate the active CA bundle
+    // without adding debug policy to the reusable updater components.
     char urls[CA_BOOT_HTTPS_TEST_URLS_BUFFER_SIZE];
     if (strlcpy(urls, CONFIG_CA_UPDATER_BOOT_HTTPS_TEST_URLS, sizeof(urls)) >= sizeof(urls)) {
         ESP_LOGE(TAG, "Boot HTTPS diagnostic URL list is too long");
@@ -247,7 +172,7 @@ static void run_boot_https_diagnostics(void)
 
         int status = 0;
         int64_t content_length = 0;
-        esp_err_t err = probe_https_url(url, &status, &content_length);
+        esp_err_t err = manifest_file_updater_probe_https(url, &status, &content_length);
         ESP_LOGI(TAG, "HTTPS diagnostic url=%s status=%d content_length=%lld result=%s",
                  url, status, content_length, esp_err_to_name(err));
     }

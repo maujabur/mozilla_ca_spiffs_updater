@@ -6,7 +6,6 @@ idf_component_register(
         ca_manifest_updater
         ca_manager
         esp_event
-        esp_http_client
         esp_netif
         esp_wifi
         nvs_flash

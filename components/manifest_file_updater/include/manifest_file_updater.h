@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stddef.h>
 
 #include "esp_err.h"
@@ -48,6 +49,10 @@ typedef enum {
 typedef esp_err_t (*manifest_file_apply_fn)(const char *verified_path,
                                             const manifest_file_artifact_t *artifact,
                                             void *user_ctx);
+
+esp_err_t manifest_file_updater_probe_https(const char *url,
+                                            int *out_status,
+                                            int64_t *out_content_length);
 
 esp_err_t manifest_file_updater_fetch_manifest(const char *manifest_url,
                                                const manifest_file_update_request_t *request,

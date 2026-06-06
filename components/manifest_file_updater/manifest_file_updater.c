@@ -265,6 +265,77 @@ cleanup:
     return err;
 }
 
+esp_err_t manifest_file_updater_probe_https(const char *url,
+                                            int *out_status,
+                                            int64_t *out_content_length)
+{
+    if (url == NULL || url[0] == '\0' || out_status == NULL || out_content_length == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strncmp(url, "https://", strlen("https://")) != 0) {
+        ESP_LOGE(TAG, "URL must use https");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_status = 0;
+    *out_content_length = 0;
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = CONFIG_MANIFEST_FILE_UPDATER_HTTP_TIMEOUT_MS,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true,
+        .max_redirection_count = CONFIG_MANIFEST_FILE_UPDATER_MAX_REDIRECTS,
+        .buffer_size = CONFIG_MANIFEST_FILE_UPDATER_DOWNLOAD_BUFFER_SIZE,
+        .buffer_size_tx = CONFIG_MANIFEST_FILE_UPDATER_DOWNLOAD_BUFFER_SIZE,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = ESP_OK;
+    int64_t content_length = 0;
+    int status = 0;
+    for (int redirect_count = 0; redirect_count <= CONFIG_MANIFEST_FILE_UPDATER_MAX_REDIRECTS; redirect_count++) {
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Probe HTTP open failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+
+        content_length = esp_http_client_fetch_headers(client);
+        if (content_length < 0) {
+            ESP_LOGE(TAG, "Probe HTTP fetch headers failed: %lld", content_length);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        status = esp_http_client_get_status_code(client);
+        if (!is_http_redirect_status(status)) {
+            break;
+        }
+
+        ESP_LOGI(TAG, "Following probe HTTP redirect: status=%d", status);
+        err = esp_http_client_set_redirection(client);
+        esp_http_client_close(client);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Probe HTTP redirect failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+    }
+
+    *out_status = status;
+    *out_content_length = content_length;
+    err = status >= 200 && status < 300 ? ESP_OK : ESP_FAIL;
+
+cleanup:
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return err;
+}
+
 static void build_temp_path(const manifest_file_update_request_t *request,
                             char *path,
                             size_t path_size)
