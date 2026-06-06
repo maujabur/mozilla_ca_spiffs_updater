@@ -41,6 +41,11 @@ Para publicar o bundle em um repositorio separado de artefatos, gere o pacote em
 um diretorio que possa ser commitado nesse repo:
 
 ```bash
+git clone https://github.com/maujabur/mozilla_ca_spiffs_artifacts.git \
+  ../mozilla_ca_spiffs_artifacts
+```
+
+```bash
 python tools/certificate_prepare/package_artifacts.py 1.0.9 \
   --prepare \
   --out-dir ../mozilla_ca_spiffs_artifacts/ca/stable \

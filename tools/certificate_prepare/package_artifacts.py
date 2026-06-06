@@ -63,6 +63,32 @@ def _write_manifest(path, artifact):
     path.write_text(json.dumps(artifact, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
+def _find_git_root(path):
+    path = Path(path).resolve()
+    for candidate in [path, *path.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _print_publish_hint(out_dir):
+    git_root = _find_git_root(out_dir)
+    print("")
+    if git_root is None:
+        print("Warning: output directory is not inside a Git repository.")
+        print("Files were generated locally only. To publish them, write --out-dir")
+        print("inside a clone of the artifact repository, then commit and push.")
+        return
+
+    rel_out = Path(out_dir).resolve().relative_to(git_root)
+    print("Publish with:")
+    print(f"  cd {git_root}")
+    print(f"  git add {rel_out}/bundle_ca.bin {rel_out}/bundle_ca.manifest.json \\")
+    print(f"          {rel_out}/bundle_ca.version {rel_out}/bundle_ca.sha256")
+    print("  git commit -m \"Publish CA bundle <version>\"")
+    print("  git push origin main")
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         description="Build CA bundle artifact files for publication in an artifact repository"
@@ -142,6 +168,7 @@ def _run(args):
         print("Additional artifact URLs:")
         for url in artifact_urls[1:]:
             print(f"  {url}")
+    _print_publish_hint(out_dir)
     return 0
 
 
