@@ -1,4 +1,8 @@
-menu "Mozilla CA SPIFFS updater example"
+menu "Example consumer app"
+
+    comment "Application-owned settings. Reusable component settings appear in their own menus."
+
+    menu "Wi-Fi"
 
     config CA_UPDATER_WIFI_SSID
         string "Wi-Fi SSID"
@@ -8,12 +12,20 @@ menu "Mozilla CA SPIFFS updater example"
         string "Wi-Fi password"
         default ""
 
+    endmenu
+
+    menu "CA bundle update"
+
     config CA_UPDATER_MANIFEST_URL
-        string "Mozilla CA bundle manifest URL"
+        string "CA bundle manifest URL"
         default ""
         help
             HTTPS URL that serves a small JSON manifest with version, URL,
             SHA-256, and size for the bundle binary.
+
+    endmenu
+
+    menu "HTTPS diagnostics"
 
     config CA_UPDATER_BOOT_HTTPS_TEST_URLS
         string "Boot HTTPS diagnostic URLs"
@@ -21,5 +33,7 @@ menu "Mozilla CA SPIFFS updater example"
         help
             Comma-separated HTTPS URLs tested after Wi-Fi connects. This is
             useful when the serial monitor cannot send interactive commands.
+
+    endmenu
 
 endmenu

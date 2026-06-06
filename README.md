@@ -31,10 +31,10 @@ Ele usa a mesma versao detectada no projeto principal aberto: ESP-IDF `6.2.0` (`
 
 Abra `idf.py menuconfig` e ajuste:
 
-- `Mozilla CA SPIFFS updater example > Wi-Fi SSID`
-- `Mozilla CA SPIFFS updater example > Wi-Fi password`
-- `Mozilla CA SPIFFS updater example > Mozilla CA bundle manifest URL`
-- `Mozilla CA SPIFFS updater example > Boot HTTPS diagnostic URLs`
+- `Example consumer app > Wi-Fi > Wi-Fi SSID`
+- `Example consumer app > Wi-Fi > Wi-Fi password`
+- `Example consumer app > CA bundle update > CA bundle manifest URL`
+- `Example consumer app > HTTPS diagnostics > Boot HTTPS diagnostic URLs`
 
 As opcoes de storage do componente ficam em `CA manager`. Timeouts e buffers do
 download generico ficam em `Manifest file updater`.
